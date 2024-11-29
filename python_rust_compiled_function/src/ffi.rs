@@ -1,4 +1,4 @@
-use arrow::ffi;
+use polars_arrow::ffi;
 use polars::prelude::*;
 use pyo3::exceptions::PyValueError;
 use pyo3::ffi::Py_uintptr_t;
@@ -32,7 +32,7 @@ fn array_to_rust(arrow_array: &Bound<PyAny>) -> PyResult<ArrayRef> {
 /// Arrow array to Python.
 pub(crate) fn to_py_array(py: Python, pyarrow: &Bound<PyModule>, array: ArrayRef) -> PyResult<PyObject> {
     let schema = Box::new(ffi::export_field_to_c(&ArrowField::new(
-        "",
+        "".into(),
         array.dtype().clone(),
         true,
     )));
@@ -61,13 +61,13 @@ pub fn py_series_to_rust_series(series: &Bound<PyAny>) -> PyResult<Series> {
     // retrieve rust arrow array
     let array = array_to_rust(&array)?;
 
-    Series::try_from((name.as_str(), array)).map_err(|e| PyValueError::new_err(format!("{}", e)))
+    Series::try_from((PlSmallStr::from_string(name), array)).map_err(|e| PyValueError::new_err(format!("{}", e)))
 }
 
 pub fn rust_series_to_py_series(series: &Series) -> PyResult<PyObject> {
     // ensure we have a single chunk
     let series = series.rechunk();
-    let array = series.to_arrow(0, false);
+    let array = series.to_arrow(0, CompatLevel::oldest());
 
     Python::with_gil(|py| {
         // import pyarrow
