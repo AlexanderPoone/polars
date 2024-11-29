@@ -1,0 +1,1 @@
+Alex: The `polars` library has removed all examples without any clear reason. I've managed to recover them, updated all dependencies (such as `polars-arrow` and `pyo3`) to their latest versions, and refreshed the source code for the examples.
