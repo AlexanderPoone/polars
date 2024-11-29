@@ -1,0 +1,9 @@
+[package]
+name = "read_parquet_cloud"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+polars = { version = "0.44.2", features = ["lazy", "aws", "parquet"] }
+
+aws-creds = "0.38.0"
