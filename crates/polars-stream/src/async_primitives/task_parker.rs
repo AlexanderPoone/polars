@@ -43,7 +43,7 @@ pub struct TaskParkFuture<'a> {
     parker: &'a TaskParker,
 }
 
-impl Future for TaskParkFuture<'_> {
+impl<'a> Future for TaskParkFuture<'a> {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {

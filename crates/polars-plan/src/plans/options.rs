@@ -39,7 +39,6 @@ pub struct FileScanOptions {
     pub hive_options: HiveOptions,
     pub glob: bool,
     pub include_file_paths: Option<PlSmallStr>,
-    pub allow_missing_columns: bool,
 }
 
 #[derive(Clone, Debug, Copy, Default, Eq, PartialEq, Hash)]

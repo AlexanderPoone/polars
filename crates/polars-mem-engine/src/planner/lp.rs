@@ -168,7 +168,7 @@ fn create_physical_plan_impl(
                         e,
                         Context::Default,
                         expr_arena,
-                        &options.schema,
+                        Some(&options.schema),
                         &mut state,
                     )
                 };
@@ -210,7 +210,7 @@ fn create_physical_plan_impl(
             },
             SinkType::File { file_type, .. } => {
                 polars_bail!(InvalidOperation:
-                    "sink_{file_type:?} not yet supported in standard engine. Use 'collect().write_{file_type:?}()'"
+                    "sink_{file_type:?} not yet supported in standard engine. Use 'collect().write_parquet()'"
                 )
             },
             #[cfg(feature = "cloud")]
@@ -239,11 +239,7 @@ fn create_physical_plan_impl(
             Ok(Box::new(executors::SliceExec { input, offset, len }))
         },
         Filter { input, predicate } => {
-            let mut streamable = is_streamable(
-                predicate.node(),
-                expr_arena,
-                IsStreamableContext::new(Context::Default).with_allow_cast_categorical(false),
-            );
+            let mut streamable = is_streamable(predicate.node(), expr_arena, Context::Default);
             let input_schema = lp_arena.get(input).schema(lp_arena).into_owned();
             if streamable {
                 // This can cause problems with string caches
@@ -268,7 +264,7 @@ fn create_physical_plan_impl(
                 &predicate,
                 Context::Default,
                 expr_arena,
-                &input_schema,
+                Some(&input_schema),
                 &mut state,
             )?;
             Ok(Box::new(executors::FilterExec::new(
@@ -301,7 +297,7 @@ fn create_physical_plan_impl(
                         &pred,
                         Context::Default,
                         expr_arena,
-                        output_schema.as_ref().unwrap_or(&file_info.schema),
+                        output_schema.as_ref(),
                         &mut state,
                     )
                 })
@@ -378,20 +374,16 @@ fn create_physical_plan_impl(
                 POOL.current_num_threads() > expr.len(),
                 state.expr_depth,
             );
+
+            let streamable =
+                options.should_broadcast && all_streamable(&expr, expr_arena, Context::Default);
             let phys_expr = create_physical_expressions_from_irs(
                 &expr,
                 Context::Default,
                 expr_arena,
-                &input_schema,
+                Some(&input_schema),
                 &mut state,
             )?;
-
-            let streamable = options.should_broadcast && all_streamable(&expr, expr_arena, IsStreamableContext::new(Context::Default).with_allow_cast_categorical(false))
-                // If all columns are literal we would get a 1 row per thread.
-                && !phys_expr.iter().all(|p| {
-                    p.is_literal()
-                });
-
             Ok(Box::new(executors::ProjectionExec {
                 input,
                 expr: phys_expr,
@@ -427,7 +419,13 @@ fn create_physical_plan_impl(
             let mut state = ExpressionConversionState::new(true, state.expr_depth);
             let selection = predicate
                 .map(|pred| {
-                    create_physical_expr(&pred, Context::Default, expr_arena, &schema, &mut state)
+                    create_physical_expr(
+                        &pred,
+                        Context::Default,
+                        expr_arena,
+                        Some(&schema),
+                        &mut state,
+                    )
                 })
                 .transpose()?;
             Ok(Box::new(executors::DataFrameExec {
@@ -448,7 +446,7 @@ fn create_physical_plan_impl(
                 &by_column,
                 Context::Default,
                 expr_arena,
-                input_schema.as_ref(),
+                Some(input_schema.as_ref()),
                 &mut ExpressionConversionState::new(true, state.expr_depth),
             )?;
             let input = create_physical_plan_impl(input, lp_arena, expr_arena, state)?;
@@ -490,14 +488,14 @@ fn create_physical_plan_impl(
                 &keys,
                 Context::Default,
                 expr_arena,
-                &input_schema,
+                Some(&input_schema),
                 &mut ExpressionConversionState::new(true, state.expr_depth),
             )?;
             let phys_aggs = create_physical_expressions_from_irs(
                 &aggs,
                 Context::Aggregation,
                 expr_arena,
-                &input_schema,
+                Some(&input_schema),
                 &mut ExpressionConversionState::new(true, state.expr_depth),
             )?;
 
@@ -596,24 +594,21 @@ fn create_physical_plan_impl(
             } else {
                 false
             };
-            let schema_left = lp_arena.get(input_left).schema(lp_arena).into_owned();
-            let schema_right = lp_arena.get(input_right).schema(lp_arena).into_owned();
 
             let input_left = create_physical_plan_impl(input_left, lp_arena, expr_arena, state)?;
             let input_right = create_physical_plan_impl(input_right, lp_arena, expr_arena, state)?;
-
             let left_on = create_physical_expressions_from_irs(
                 &left_on,
                 Context::Default,
                 expr_arena,
-                &schema_left,
+                None,
                 &mut ExpressionConversionState::new(true, state.expr_depth),
             )?;
             let right_on = create_physical_expressions_from_irs(
                 &right_on,
                 Context::Default,
                 expr_arena,
-                &schema_right,
+                None,
                 &mut ExpressionConversionState::new(true, state.expr_depth),
             )?;
             let options = Arc::try_unwrap(options).unwrap_or_else(|options| (*options).clone());
@@ -629,18 +624,14 @@ fn create_physical_plan_impl(
         HStack {
             input,
             exprs,
-            schema: output_schema,
+            schema: _schema,
             options,
         } => {
             let input_schema = lp_arena.get(input).schema(lp_arena).into_owned();
             let input = create_physical_plan_impl(input, lp_arena, expr_arena, state)?;
 
-            let streamable = options.should_broadcast
-                && all_streamable(
-                    &exprs,
-                    expr_arena,
-                    IsStreamableContext::new(Context::Default).with_allow_cast_categorical(false),
-                );
+            let streamable =
+                options.should_broadcast && all_streamable(&exprs, expr_arena, Context::Default);
 
             let mut state = ExpressionConversionState::new(
                 POOL.current_num_threads() > exprs.len(),
@@ -651,7 +642,7 @@ fn create_physical_plan_impl(
                 &exprs,
                 Context::Default,
                 expr_arena,
-                &input_schema,
+                Some(&input_schema),
                 &mut state,
             )?;
             Ok(Box::new(executors::StackExec {
@@ -659,7 +650,6 @@ fn create_physical_plan_impl(
                 has_windows: state.has_windows,
                 exprs: phys_exprs,
                 input_schema,
-                output_schema,
                 options,
                 streamable,
             }))

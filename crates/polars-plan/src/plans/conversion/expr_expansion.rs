@@ -1,4 +1,5 @@
 //! this contains code used for rewriting projections, expanding wildcards, regex selection etc.
+use std::ops::BitXor;
 
 use super::*;
 
@@ -44,7 +45,7 @@ fn rewrite_special_aliases(expr: Expr) -> PolarsResult<Expr> {
                 Ok(Expr::Alias(expr, name.clone()))
             },
             Expr::RenameAlias { expr, function } => {
-                let name = get_single_leaf(&expr)?;
+                let name = get_single_leaf(&expr).unwrap();
                 let name = function.call(&name)?;
                 Ok(Expr::Alias(expr, name))
             },
@@ -175,28 +176,26 @@ fn expand_columns(
     schema: &Schema,
     exclude: &PlHashSet<PlSmallStr>,
 ) -> PolarsResult<()> {
-    if !expr.into_iter().all(|e| match e {
-        // check for invalid expansions such as `col([a, b]) + col([c, d])`
-        Expr::Columns(ref members) => members.as_ref() == names,
-        _ => true,
-    }) {
-        polars_bail!(ComputeError: "expanding more than one `col` is not allowed");
-    }
+    let mut is_valid = true;
     for name in names {
         if !exclude.contains(name) {
-            let new_expr = expr.clone().map_expr(|e| match e {
-                Expr::Columns(_) => Expr::Column((*name).clone()),
-                Expr::Exclude(input, _) => Arc::unwrap_or_clone(input),
-                e => e,
-            });
-
+            let new_expr = expr.clone();
+            let (new_expr, new_expr_valid) = replace_columns_with_column(new_expr, names, name);
+            is_valid &= new_expr_valid;
+            // we may have regex col in columns.
+            #[allow(clippy::collapsible_else_if)]
             #[cfg(feature = "regex")]
-            replace_regex(&new_expr, result, schema, exclude)?;
-
+            {
+                replace_regex(&new_expr, result, schema, exclude)?;
+            }
             #[cfg(not(feature = "regex"))]
-            result.push(rewrite_special_aliases(new_expr)?);
+            {
+                let new_expr = rewrite_special_aliases(new_expr)?;
+                result.push(new_expr)
+            }
         }
     }
+    polars_ensure!(is_valid, ComputeError: "expanding more than one `col` is not allowed");
     Ok(())
 }
 
@@ -245,6 +244,30 @@ fn replace_dtype_or_index_with_column(
         Expr::Exclude(input, _) => Arc::unwrap_or_clone(input),
         e => e,
     })
+}
+
+/// This replaces the columns Expr with a Column Expr. It also removes the Exclude Expr from the
+/// expression chain.
+pub(super) fn replace_columns_with_column(
+    mut expr: Expr,
+    names: &[PlSmallStr],
+    column_name: &PlSmallStr,
+) -> (Expr, bool) {
+    let mut is_valid = true;
+    expr = expr.map_expr(|e| match e {
+        Expr::Columns(members) => {
+            // `col([a, b]) + col([c, d])`
+            if members.as_ref() == names {
+                Expr::Column(column_name.clone())
+            } else {
+                is_valid = false;
+                Expr::Columns(members)
+            }
+        },
+        Expr::Exclude(input, _) => Arc::unwrap_or_clone(input),
+        e => e,
+    });
+    (expr, is_valid)
 }
 
 fn dtypes_match(d1: &DataType, d2: &DataType) -> bool {
@@ -337,43 +360,8 @@ fn expand_struct_fields(
             unreachable!()
         };
         let field = input[0].to_field(schema, Context::Default)?;
-        let dtype = field.dtype();
-        let DataType::Struct(fields) = dtype else {
-            if !dtype.is_known() {
-                let mut msg = String::from(
-                    "expected 'struct' got an unknown data type
-
-This means there was an operation of which the output data type could not be determined statically.
-Try setting the output data type for that operation.",
-                );
-                for e in input[0].into_iter() {
-                    #[allow(clippy::single_match)]
-                    match e {
-                        #[cfg(feature = "list_to_struct")]
-                        Expr::Function {
-                            input: _,
-                            function,
-                            options: _,
-                        } => {
-                            if matches!(
-                                function,
-                                FunctionExpr::ListExpr(ListFunction::ToStruct(..))
-                            ) {
-                                msg.push_str(
-                                    "
-
-Hint: set 'upper_bound' for 'list.to_struct'.",
-                                );
-                            }
-                        },
-                        _ => {},
-                    }
-                }
-
-                polars_bail!(InvalidOperation: msg)
-            } else {
-                polars_bail!(InvalidOperation: "expected 'struct' got {}", field.dtype())
-            }
+        let DataType::Struct(fields) = field.dtype() else {
+            polars_bail!(InvalidOperation: "expected 'struct'")
         };
 
         // Wildcard.
@@ -562,7 +550,7 @@ fn expand_function_inputs(
                 .flags
                 .contains(FunctionFlags::INPUT_WILDCARD_EXPANSION) =>
         {
-            *input = rewrite_projections(core::mem::take(input), schema, &[], opt_flags)?;
+            *input = rewrite_projections(core::mem::take(input), schema, &[], opt_flags).unwrap();
             if input.is_empty() && !options.flags.contains(FunctionFlags::ALLOW_EMPTY_INPUTS) {
                 // Needed to visualize the error
                 *input = vec![Expr::Literal(LiteralValue::Null)];
@@ -574,7 +562,7 @@ fn expand_function_inputs(
     })
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone)]
 struct ExpansionFlags {
     multiple_columns: bool,
     has_nth: bool,
@@ -655,7 +643,7 @@ fn find_flags(expr: &Expr) -> PolarsResult<ExpansionFlags> {
 
 #[cfg(feature = "dtype-struct")]
 fn toggle_cse(opt_flags: &mut OptFlags) {
-    if opt_flags.contains(OptFlags::EAGER) && !opt_flags.contains(OptFlags::NEW_STREAMING) {
+    if opt_flags.contains(OptFlags::EAGER) {
         #[cfg(debug_assertions)]
         {
             use polars_core::config::verbose;
@@ -831,31 +819,42 @@ fn replace_selector_inner(
             members.extend(scratch.drain(..))
         },
         Selector::Add(lhs, rhs) => {
-            let mut tmp_members: PlIndexSet<Expr> = Default::default();
             replace_selector_inner(*lhs, members, scratch, schema, keys)?;
-            replace_selector_inner(*rhs, &mut tmp_members, scratch, schema, keys)?;
-            members.extend(tmp_members)
+            let mut rhs_members: PlIndexSet<Expr> = Default::default();
+            replace_selector_inner(*rhs, &mut rhs_members, scratch, schema, keys)?;
+            members.extend(rhs_members)
         },
         Selector::ExclusiveOr(lhs, rhs) => {
-            let mut tmp_members = Default::default();
-            replace_selector_inner(*lhs, &mut tmp_members, scratch, schema, keys)?;
-            replace_selector_inner(*rhs, members, scratch, schema, keys)?;
+            let mut lhs_members = Default::default();
+            replace_selector_inner(*lhs, &mut lhs_members, scratch, schema, keys)?;
 
-            *members = tmp_members.symmetric_difference(members).cloned().collect();
+            let mut rhs_members = Default::default();
+            replace_selector_inner(*rhs, &mut rhs_members, scratch, schema, keys)?;
+
+            let xor_members = lhs_members.bitxor(&rhs_members);
+            *members = xor_members;
         },
-        Selector::Intersect(lhs, rhs) => {
-            let mut tmp_members = Default::default();
-            replace_selector_inner(*lhs, &mut tmp_members, scratch, schema, keys)?;
-            replace_selector_inner(*rhs, members, scratch, schema, keys)?;
+        Selector::InterSect(lhs, rhs) => {
+            replace_selector_inner(*lhs, members, scratch, schema, keys)?;
 
-            *members = tmp_members.intersection(members).cloned().collect();
+            let mut rhs_members = Default::default();
+            replace_selector_inner(*rhs, &mut rhs_members, scratch, schema, keys)?;
+
+            *members = members.intersection(&rhs_members).cloned().collect()
         },
         Selector::Sub(lhs, rhs) => {
-            let mut tmp_members = Default::default();
-            replace_selector_inner(*lhs, &mut tmp_members, scratch, schema, keys)?;
-            replace_selector_inner(*rhs, members, scratch, schema, keys)?;
+            replace_selector_inner(*lhs, members, scratch, schema, keys)?;
 
-            *members = tmp_members.difference(members).cloned().collect();
+            let mut rhs_members = Default::default();
+            replace_selector_inner(*rhs, &mut rhs_members, scratch, schema, keys)?;
+
+            let mut new_members = PlIndexSet::with_capacity(members.len());
+            for e in members.drain(..) {
+                if !rhs_members.contains(&e) {
+                    new_members.insert(e);
+                }
+            }
+            *members = new_members;
         },
     }
     Ok(())

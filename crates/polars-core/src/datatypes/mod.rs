@@ -25,7 +25,6 @@ use std::ops::{Add, AddAssign, Div, Mul, Rem, Sub, SubAssign};
 pub use aliases::*;
 pub use any_value::*;
 pub use arrow::array::{ArrayCollectIterExt, ArrayFromIter, ArrayFromIterDtype, StaticArray};
-pub use arrow::datatypes::reshape::*;
 #[cfg(feature = "dtype-categorical")]
 use arrow::datatypes::IntegerType;
 pub use arrow::datatypes::{ArrowDataType, TimeUnit as ArrowTimeUnit};
@@ -35,7 +34,7 @@ use bytemuck::Zeroable;
 pub use dtype::*;
 pub use field::*;
 pub use into_scalar::*;
-use num_traits::{AsPrimitive, Bounded, FromPrimitive, Num, NumCast, One, Zero};
+use num_traits::{Bounded, FromPrimitive, Num, NumCast, One, Zero};
 use polars_compute::arithmetic::HasPrimitiveArithmeticKernel;
 use polars_compute::float_sum::FloatSum;
 use polars_utils::abs_diff::AbsDiff;
@@ -299,7 +298,7 @@ unsafe impl<T: PolarsObject> PolarsDataType for ObjectType<T> {
     type OwnedPhysical = T;
     type ZeroablePhysical<'a> = Option<&'a T>;
     type Array = ObjectArray<T>;
-    type IsNested = FalseT;
+    type IsNested = TrueT;
     type HasViews = FalseT;
     type IsStruct = FalseT;
     type IsObject = TrueT;
@@ -355,7 +354,6 @@ pub trait NumericNative:
     + IsFloat
     + HasPrimitiveArithmeticKernel<TrueDivT=<Self::TrueDivPolarsType as PolarsNumericType>::Native>
     + FloatSum<f64>
-    + AsPrimitive<f64>
     + MinMax
     + IsNull
 {

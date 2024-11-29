@@ -1,7 +1,7 @@
 use std::io::Seek;
 use std::sync::OnceLock;
 
-use polars_parquet_format::thrift::protocol::TCompactInputProtocol;
+use parquet_format_safe::thrift::protocol::TCompactInputProtocol;
 use polars_utils::mmap::{MemReader, MemSlice};
 
 use super::PageIterator;
@@ -13,7 +13,6 @@ use crate::parquet::page::{
     ParquetPageHeader,
 };
 use crate::parquet::CowBuffer;
-use crate::write::Encoding;
 
 /// This meta is a small part of [`ColumnChunkMetadata`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,7 +96,7 @@ impl PageReader {
         Self::new_with_page_meta(reader, column.into(), scratch, max_page_size)
     }
 
-    /// Create a new [`PageReader`] with [`PageMetaData`].
+    /// Create a a new [`PageReader`] with [`PageMetaData`].
     ///
     /// It assumes that the reader has been `sought` (`seek`) to the beginning of `column`.
     pub fn new_with_page_meta(
@@ -252,10 +251,7 @@ pub(super) fn finish_page(
             })?;
 
             if do_verbose {
-                eprintln!(
-                    "Parquet DictPage ( num_values: {}, datatype: {:?} )",
-                    dict_header.num_values, descriptor.primitive_type
-                );
+                println!("DictPage ( )");
             }
 
             let is_sorted = dict_header.is_sorted.unwrap_or(false);
@@ -279,11 +275,9 @@ pub(super) fn finish_page(
             })?;
 
             if do_verbose {
-                eprintln!(
-                    "Parquet DataPageV1 ( num_values: {}, datatype: {:?}, encoding: {:?} )",
-                    header.num_values,
-                    descriptor.primitive_type,
-                    Encoding::try_from(header.encoding).ok()
+                println!(
+                    "DataPageV1 ( num_values: {}, datatype: {:?}, encoding: {:?} )",
+                    header.num_values, descriptor.primitive_type, header.encoding
                 );
             }
 
@@ -304,10 +298,8 @@ pub(super) fn finish_page(
 
             if do_verbose {
                 println!(
-                    "Parquet DataPageV2 ( num_values: {}, datatype: {:?}, encoding: {:?} )",
-                    header.num_values,
-                    descriptor.primitive_type,
-                    Encoding::try_from(header.encoding).ok()
+                    "DataPageV2 ( num_values: {}, datatype: {:?}, encoding: {:?} )",
+                    header.num_values, descriptor.primitive_type, header.encoding
                 );
             }
 

@@ -130,7 +130,7 @@ impl private::PrivateSeries for SeriesWrap<DatetimeChunked> {
 
     fn arg_sort_multiple(
         &self,
-        by: &[Column],
+        by: &[Series],
         options: &SortMultipleOptions,
     ) -> PolarsResult<IdxCa> {
         self.0.deref().arg_sort_multiple(by, options)
@@ -254,8 +254,16 @@ impl SeriesTrait for SeriesWrap<DatetimeChunked> {
     }
 
     fn cast(&self, dtype: &DataType, cast_options: CastOptions) -> PolarsResult<Series> {
-        match dtype {
-            DataType::String => Ok(self.0.to_string("iso")?.into_series()),
+        match (dtype, self.0.time_unit()) {
+            (DataType::String, TimeUnit::Milliseconds) => {
+                Ok(self.0.to_string("%F %T%.3f")?.into_series())
+            },
+            (DataType::String, TimeUnit::Microseconds) => {
+                Ok(self.0.to_string("%F %T%.6f")?.into_series())
+            },
+            (DataType::String, TimeUnit::Nanoseconds) => {
+                Ok(self.0.to_string("%F %T%.9f")?.into_series())
+            },
             _ => self.0.cast_with_options(dtype, cast_options),
         }
     }
@@ -350,7 +358,11 @@ impl SeriesTrait for SeriesWrap<DatetimeChunked> {
         Ok(Scalar::new(self.dtype().clone(), av))
     }
 
-    fn quantile_reduce(&self, _quantile: f64, _method: QuantileMethod) -> PolarsResult<Scalar> {
+    fn quantile_reduce(
+        &self,
+        _quantile: f64,
+        _interpol: QuantileInterpolOptions,
+    ) -> PolarsResult<Scalar> {
         Ok(Scalar::new(self.dtype().clone(), AnyValue::Null))
     }
 

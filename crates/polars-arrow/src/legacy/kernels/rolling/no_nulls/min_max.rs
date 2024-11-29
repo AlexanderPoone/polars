@@ -135,12 +135,7 @@ macro_rules! minmax_window {
         impl<'a, T: NativeType + IsFloat + PartialOrd> RollingAggWindowNoNulls<'a, T>
             for $m_window<'a, T>
         {
-            fn new(
-                slice: &'a [T],
-                start: usize,
-                end: usize,
-                _params: Option<RollingFnParams>,
-            ) -> Self {
+            fn new(slice: &'a [T], start: usize, end: usize, _params: DynArgs) -> Self {
                 let (idx, m) =
                     unsafe { $get_m_and_idx(slice, start, end, 0).unwrap_or((0, &slice[start])) };
                 Self {
@@ -243,7 +238,7 @@ macro_rules! rolling_minmax_func {
             min_periods: usize,
             center: bool,
             weights: Option<&[f64]>,
-            _params: Option<RollingFnParams>,
+            _params: DynArgs,
         ) -> PolarsResult<ArrayRef>
         where
             T: NativeType + PartialOrd + IsFloat + Bounded + NumCast + Mul<Output = T> + Num,

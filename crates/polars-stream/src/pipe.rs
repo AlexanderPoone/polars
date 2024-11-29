@@ -1,14 +1,11 @@
-use std::cmp::Reverse;
-
 use polars_error::PolarsResult;
-use polars_utils::priority::Priority;
 
 use crate::async_executor::{JoinHandle, TaskPriority, TaskScope};
 use crate::async_primitives::connector::{connector, Receiver, Sender};
 use crate::async_primitives::distributor_channel::distributor_channel;
-use crate::async_primitives::linearizer::Linearizer;
 use crate::async_primitives::wait_group::WaitGroup;
-use crate::morsel::{Morsel, MorselSeq};
+use crate::morsel::Morsel;
+use crate::utils::linearizer::Linearizer;
 use crate::{DEFAULT_DISTRIBUTOR_BUFFER_SIZE, DEFAULT_LINEARIZER_BUFFER_SIZE};
 
 pub enum PhysicalPipe {
@@ -23,7 +20,7 @@ pub enum PhysicalPipe {
 pub struct SendPort<'a>(&'a mut PhysicalPipe);
 pub struct RecvPort<'a>(&'a mut PhysicalPipe);
 
-impl RecvPort<'_> {
+impl<'a> RecvPort<'a> {
     pub fn serial(self) -> Receiver<Morsel> {
         let PhysicalPipe::Uninit(num_pipelines) = self.0 else {
             unreachable!()
@@ -44,7 +41,7 @@ impl RecvPort<'_> {
     }
 }
 
-impl SendPort<'_> {
+impl<'a> SendPort<'a> {
     #[allow(unused)]
     pub fn is_receiver_serial(&self) -> bool {
         matches!(self.0, PhysicalPipe::SerialReceiver(..))
@@ -98,7 +95,7 @@ impl PhysicalPipe {
     pub fn send_port(&mut self) -> SendPort<'_> {
         assert!(
             matches!(self, Self::SerialReceiver(..) | Self::ParallelReceiver(..)),
-            "PhysicalPipe::send_port must be called on a pipe which only has its receive port initialized"
+            "PhysicalPipe::send_port must be called on a pipe which only has its send port initialized"
         );
         SendPort(self)
     }
@@ -118,14 +115,11 @@ impl PhysicalPipe {
             Self::NeedsLinearizer(receivers, mut sender) => {
                 let num_pipelines = receivers.len();
                 let (mut linearizer, inserters) =
-                    Linearizer::<Priority<Reverse<MorselSeq>, Morsel>>::new(
-                        num_pipelines,
-                        DEFAULT_LINEARIZER_BUFFER_SIZE,
-                    );
+                    Linearizer::new(num_pipelines, DEFAULT_LINEARIZER_BUFFER_SIZE);
 
                 handles.push(scope.spawn_task(TaskPriority::High, async move {
                     while let Some(morsel) = linearizer.get().await {
-                        if sender.send(morsel.1).await.is_err() {
+                        if sender.send(morsel).await.is_err() {
                             break;
                         }
                     }
@@ -135,18 +129,10 @@ impl PhysicalPipe {
 
                 for (mut recv, mut inserter) in receivers.into_iter().zip(inserters) {
                     handles.push(scope.spawn_task(TaskPriority::High, async move {
-                        while let Ok(mut morsel) = recv.recv().await {
-                            // Drop the consume token, but only after the send has succeeded. This
-                            // ensures we have backpressure, but only once the channel fills up.
-                            let consume_token = morsel.take_consume_token();
-                            if inserter
-                                .insert(Priority(Reverse(morsel.seq()), morsel))
-                                .await
-                                .is_err()
-                            {
+                        while let Ok(morsel) = recv.recv().await {
+                            if inserter.insert(morsel).await.is_err() {
                                 break;
                             }
-                            drop(consume_token);
                         }
 
                         Ok(())

@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Sequence
 from functools import wraps
-from typing import TYPE_CHECKING, Callable, TypeVar
+from typing import TYPE_CHECKING, Callable, Sequence, TypeVar
 
 from polars._utils.various import issue_warning
 
 if TYPE_CHECKING:
     import sys
-    from collections.abc import Mapping
+    from typing import Mapping
 
     from polars._typing import Ambiguous
 

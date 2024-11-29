@@ -46,7 +46,7 @@ Examples
 
             @pl.api.register_expr_namespace("greetings")
             class Greetings:
-                def __init__(self, expr: pl.Expr) -> None:
+                def __init__(self, expr: pl.Expr):
                     self._expr = expr
 
                 def hello(self) -> pl.Expr:
@@ -80,7 +80,7 @@ Examples
 
             @pl.api.register_dataframe_namespace("split")
             class SplitFrame:
-                def __init__(self, df: pl.DataFrame) -> None:
+                def __init__(self, df: pl.DataFrame):
                     self._df = df
 
                 def by_alternate_rows(self) -> list[pl.DataFrame]:
@@ -112,7 +112,7 @@ Examples
 
             @pl.api.register_lazyframe_namespace("types")
             class DTypeOperations:
-                def __init__(self, ldf: pl.LazyFrame) -> None:
+                def __init__(self, ldf: pl.LazyFrame):
                     self._ldf = ldf
 
                 def upcast_integer_types(self) -> pl.LazyFrame:
@@ -145,7 +145,7 @@ Examples
 
             @pl.api.register_series_namespace("math")
             class MathShortcuts:
-                def __init__(self, s: pl.Series) -> None:
+                def __init__(self, s: pl.Series):
                     self._s = s
 
                 def square(self) -> pl.Series:

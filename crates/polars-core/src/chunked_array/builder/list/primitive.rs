@@ -17,15 +17,11 @@ where
         name: PlSmallStr,
         capacity: usize,
         values_capacity: usize,
-        inner_type: DataType,
+        logical_type: DataType,
     ) -> Self {
-        assert!(
-            inner_type.is_numeric() || inner_type.is_temporal(),
-            "inner type must be primitive"
-        );
         let values = MutablePrimitiveArray::<T::Native>::with_capacity(values_capacity);
         let builder = LargePrimitiveBuilder::<T::Native>::new_with_capacity(values, capacity);
-        let field = Field::new(name, DataType::List(Box::new(inner_type)));
+        let field = Field::new(name, DataType::List(Box::new(logical_type)));
 
         Self {
             builder,
@@ -76,10 +72,7 @@ where
     }
     /// Appends from an iterator over values
     #[inline]
-    pub fn append_values_iter_trusted_len<I: Iterator<Item = T::Native> + TrustedLen>(
-        &mut self,
-        iter: I,
-    ) {
+    pub fn append_iter_values<I: Iterator<Item = T::Native> + TrustedLen>(&mut self, iter: I) {
         let values = self.builder.mut_values();
 
         if iter.size_hint().0 == 0 {
@@ -87,18 +80,7 @@ where
         }
         // SAFETY:
         // trusted len, trust the type system
-        values.extend_values(iter);
-        self.builder.try_push_valid().unwrap();
-    }
-
-    #[inline]
-    pub fn append_values_iter<I: Iterator<Item = T::Native>>(&mut self, iter: I) {
-        let values = self.builder.mut_values();
-
-        if iter.size_hint().0 == 0 {
-            self.fast_explode = false;
-        }
-        values.extend_values(iter);
+        unsafe { values.extend_trusted_len_values_unchecked(iter) };
         self.builder.try_push_valid().unwrap();
     }
 

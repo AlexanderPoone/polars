@@ -3,21 +3,12 @@ use std::fmt::{Debug, Formatter};
 use polars_error::{polars_ensure, PolarsResult};
 
 use crate::nulls::IsNull;
+use crate::slice::GetSaferUnchecked;
 
 #[cfg(not(feature = "bigidx"))]
 pub type IdxSize = u32;
 #[cfg(feature = "bigidx")]
 pub type IdxSize = u64;
-
-#[cfg(not(feature = "bigidx"))]
-pub type NonZeroIdxSize = std::num::NonZeroU32;
-#[cfg(feature = "bigidx")]
-pub type NonZeroIdxSize = std::num::NonZeroU64;
-
-#[cfg(not(feature = "bigidx"))]
-pub type AtomicIdxSize = std::sync::atomic::AtomicU32;
-#[cfg(feature = "bigidx")]
-pub type AtomicIdxSize = std::sync::atomic::AtomicU64;
 
 #[derive(Clone, Copy)]
 #[repr(transparent)]
@@ -130,17 +121,24 @@ impl<T: Copy + IsNull> Indexable for &[T] {
     /// # Safety
     /// Doesn't do any bound checks.
     unsafe fn get_unchecked(&self, i: usize) -> Self::Item {
-        *<[T]>::get_unchecked(self, i)
+        *self.get_unchecked_release(i)
     }
 }
 
 pub fn check_bounds(idx: &[IdxSize], len: IdxSize) -> PolarsResult<()> {
     // We iterate in large uninterrupted chunks to help auto-vectorization.
-    let Some(max_idx) = idx.iter().copied().max() else {
-        return Ok(());
-    };
-
-    polars_ensure!(max_idx < len, OutOfBounds: "indices are out of bounds");
+    let mut in_bounds = true;
+    for chunk in idx.chunks(1024) {
+        for i in chunk {
+            if *i >= len {
+                in_bounds = false;
+            }
+        }
+        if !in_bounds {
+            break;
+        }
+    }
+    polars_ensure!(in_bounds, OutOfBounds: "indices are out of bounds");
     Ok(())
 }
 
@@ -190,6 +188,8 @@ const DEFAULT_CHUNK_BITS: u64 = 24;
 pub struct ChunkId<const CHUNK_BITS: u64 = DEFAULT_CHUNK_BITS> {
     swizzled: u64,
 }
+
+pub type NullableChunkId = ChunkId;
 
 impl Debug for ChunkId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

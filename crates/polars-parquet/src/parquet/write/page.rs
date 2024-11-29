@@ -2,10 +2,10 @@ use std::io::Write;
 
 #[cfg(feature = "async")]
 use futures::{AsyncWrite, AsyncWriteExt};
-use polars_parquet_format::thrift::protocol::TCompactOutputProtocol;
+use parquet_format_safe::thrift::protocol::TCompactOutputProtocol;
 #[cfg(feature = "async")]
-use polars_parquet_format::thrift::protocol::TCompactOutputStreamProtocol;
-use polars_parquet_format::{DictionaryPageHeader, Encoding, PageType};
+use parquet_format_safe::thrift::protocol::TCompactOutputStreamProtocol;
+use parquet_format_safe::{DictionaryPageHeader, Encoding, PageType};
 
 use crate::parquet::compression::Compression;
 use crate::parquet::error::{ParquetError, ParquetResult};

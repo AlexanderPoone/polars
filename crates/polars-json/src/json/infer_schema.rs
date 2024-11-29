@@ -134,15 +134,11 @@ pub(crate) fn coerce_dtype<A: Borrow<ArrowDataType>>(datatypes: &[A]) -> ArrowDa
             true,
         )));
     } else if datatypes.len() > 2 {
-        return datatypes
-            .iter()
-            .map(|t| t.borrow().clone())
-            .reduce(|a, b| coerce_dtype(&[a, b]))
-            .expect("not empty");
+        return coerce_dtype(datatypes);
     }
     let (lhs, rhs) = (datatypes[0].borrow(), datatypes[1].borrow());
 
-    match (lhs, rhs) {
+    return match (lhs, rhs) {
         (lhs, rhs) if lhs == rhs => lhs.clone(),
         (LargeList(lhs), LargeList(rhs)) => {
             let inner = coerce_dtype(&[lhs.dtype(), rhs.dtype()]);
@@ -175,5 +171,5 @@ pub(crate) fn coerce_dtype<A: Borrow<ArrowDataType>>(datatypes: &[A]) -> ArrowDa
         (Null, rhs) => rhs.clone(),
         (lhs, Null) => lhs.clone(),
         (_, _) => LargeUtf8,
-    }
+    };
 }

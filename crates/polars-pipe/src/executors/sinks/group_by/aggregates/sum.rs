@@ -7,6 +7,7 @@ use arrow::types::simd::Simd;
 use polars_core::export::num::NumCast;
 use polars_core::prelude::*;
 use polars_core::utils::arrow::compute::aggregate::sum_primitive;
+use polars_utils::unwrap::UnwrapUncheckedRelease;
 
 use super::*;
 
@@ -31,7 +32,7 @@ where
     }
 
     fn pre_agg(&mut self, _chunk_idx: IdxSize, item: &mut dyn ExactSizeIterator<Item = AnyValue>) {
-        let item = unsafe { item.next().unwrap_unchecked() };
+        let item = unsafe { item.next().unwrap_unchecked_release() };
         self.pre_agg_primitive(0, item.extract::<K>())
     }
     fn pre_agg_primitive<T: NumCast>(&mut self, _chunk_idx: IdxSize, item: Option<T>) {
@@ -55,11 +56,11 @@ where
             arr.sliced_unchecked(offset as usize, length as usize)
         };
         let dtype = K::PolarsType::get_dtype().to_arrow(CompatLevel::newest());
-        let arr = polars_compute::cast::cast_unchecked(arr.as_ref(), &dtype).unwrap();
+        let arr = arrow::compute::cast::cast_unchecked(arr.as_ref(), &dtype).unwrap();
         let arr = unsafe {
             arr.as_any()
                 .downcast_ref::<PrimitiveArray<K>>()
-                .unwrap_unchecked()
+                .unwrap_unchecked_release()
         };
         match (sum_primitive(arr), self.sum) {
             (Some(val), Some(sum)) => {
@@ -77,7 +78,7 @@ where
     }
 
     fn combine(&mut self, other: &dyn Any) {
-        let other = unsafe { other.downcast_ref::<Self>().unwrap_unchecked() };
+        let other = unsafe { other.downcast_ref::<Self>().unwrap_unchecked_release() };
         let sum = match (self.sum, other.sum) {
             (Some(lhs), Some(rhs)) => Some(lhs + rhs),
             (Some(lhs), None) => Some(lhs),

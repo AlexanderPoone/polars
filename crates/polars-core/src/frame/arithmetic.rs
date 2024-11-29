@@ -20,12 +20,12 @@ macro_rules! impl_arithmetic {
         let rhs = $rhs.cast(&st)?;
         let cols = POOL.install(|| {
             $self
-                .par_materialized_column_iter()
+                .columns
+                .par_iter()
                 .map(|s| $operand(&s.cast(&st)?, &rhs))
-                .map(|s| s.map(Column::from))
                 .collect::<PolarsResult<_>>()
         })?;
-        Ok(unsafe { DataFrame::new_no_checks($self.height(), cols) })
+        Ok(unsafe { DataFrame::new_no_checks(cols) })
     }};
 }
 
@@ -122,9 +122,6 @@ impl DataFrame {
             .par_iter()
             .zip(other.get_columns().par_iter())
             .map(|(l, r)| {
-                let l = l.as_materialized_series();
-                let r = r.as_materialized_series();
-
                 let diff_l = max_len - l.len();
                 let diff_r = max_len - r.len();
 
@@ -139,7 +136,7 @@ impl DataFrame {
                     r = r.extend_constant(AnyValue::Null, diff_r)?;
                 };
 
-                f(&l, &r).map(Column::from)
+                f(&l, &r)
             });
         let mut cols = POOL.install(|| cols.collect::<PolarsResult<Vec<_>>>())?;
 
@@ -155,7 +152,7 @@ impl DataFrame {
                 // trick to fill a series with nulls
                 let vals: &[Option<i32>] = &[None];
                 let s = Series::new(name.clone(), vals).cast(dtype)?;
-                cols.push(s.new_from_index(0, max_len).into())
+                cols.push(s.new_from_index(0, max_len))
             }
         }
         DataFrame::new(cols)

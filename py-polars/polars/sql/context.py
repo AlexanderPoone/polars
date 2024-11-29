@@ -5,7 +5,9 @@ import re
 from typing import (
     TYPE_CHECKING,
     Callable,
+    Collection,
     Generic,
+    Mapping,
     Union,
     overload,
 )
@@ -28,7 +30,6 @@ with contextlib.suppress(ImportError):  # Module not available when building doc
 
 if TYPE_CHECKING:
     import sys
-    from collections.abc import Collection, Mapping
     from types import TracebackType
     from typing import Any, Final, Literal
 

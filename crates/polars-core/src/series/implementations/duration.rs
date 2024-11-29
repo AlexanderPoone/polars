@@ -244,7 +244,7 @@ impl private::PrivateSeries for SeriesWrap<DurationChunked> {
 
     fn arg_sort_multiple(
         &self,
-        by: &[Column],
+        by: &[Series],
         options: &SortMultipleOptions,
     ) -> PolarsResult<IdxCa> {
         self.0.deref().arg_sort_multiple(by, options)
@@ -501,8 +501,12 @@ impl SeriesTrait for SeriesWrap<DurationChunked> {
             v.as_duration(self.0.time_unit()),
         ))
     }
-    fn quantile_reduce(&self, quantile: f64, method: QuantileMethod) -> PolarsResult<Scalar> {
-        let v = self.0.quantile_reduce(quantile, method)?;
+    fn quantile_reduce(
+        &self,
+        quantile: f64,
+        interpol: QuantileInterpolOptions,
+    ) -> PolarsResult<Scalar> {
+        let v = self.0.quantile_reduce(quantile, interpol)?;
         let to = self.dtype().to_physical();
         let v = v.value().cast(&to);
         Ok(Scalar::new(

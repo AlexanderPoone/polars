@@ -1,6 +1,6 @@
 /// # Safety
 /// unsafe code downstream relies on the correct is_float call
-pub unsafe trait IsFloat: private::Sealed + Sized {
+pub unsafe trait IsFloat: private::Sealed {
     fn is_float() -> bool {
         false
     }
@@ -11,10 +11,6 @@ pub unsafe trait IsFloat: private::Sealed + Sized {
 
     fn is_f64() -> bool {
         false
-    }
-
-    fn nan_value() -> Self {
-        unimplemented!()
     }
 
     #[allow(clippy::wrong_self_convention)]
@@ -80,10 +76,6 @@ macro_rules! impl_is_float {
 
             fn is_f64() -> bool {
                 $is_f64
-            }
-
-            fn nan_value() -> Self {
-                Self::NAN
             }
 
             #[inline]

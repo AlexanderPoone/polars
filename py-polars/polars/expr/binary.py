@@ -16,7 +16,7 @@ class ExprBinaryNameSpace:
 
     _accessor = "bin"
 
-    def __init__(self, expr: Expr) -> None:
+    def __init__(self, expr: Expr):
         self._pyexpr = expr._pyexpr
 
     def contains(self, literal: IntoExpr) -> Expr:

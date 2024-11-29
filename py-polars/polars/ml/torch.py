@@ -1,7 +1,7 @@
 # mypy: disable-error-code="unused-ignore"
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from polars._utils.unstable import issue_unstable_warning
 from polars.dataframe import DataFrame
@@ -10,7 +10,6 @@ from polars.selectors import exclude
 
 if TYPE_CHECKING:
     import sys
-    from collections.abc import Sequence
 
     from torch import Tensor, memory_format
 
@@ -122,7 +121,7 @@ class PolarsDataset(TensorDataset):  # type: ignore[misc]
         *,
         label: str | Expr | Sequence[str | Expr] | None = None,
         features: str | Expr | Sequence[str | Expr] | None = None,
-    ) -> None:
+    ):
         issue_unstable_warning("`PolarsDataset` is considered unstable.")
         if isinstance(label, (str, Expr)):
             label = [label]

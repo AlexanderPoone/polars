@@ -25,7 +25,6 @@ fn calc_iters_remaining(length: usize, min_length_for_iter: usize, consume: usiz
     1 + obvious_iters // Thus always exactly 1 more iter.
 }
 
-#[derive(Clone)]
 pub struct TrueIdxIter<'a> {
     mask: BitMask<'a>,
     first_unknown: usize,
@@ -58,7 +57,7 @@ impl<'a> TrueIdxIter<'a> {
     }
 }
 
-impl Iterator for TrueIdxIter<'_> {
+impl<'a> Iterator for TrueIdxIter<'a> {
     type Item = usize;
 
     #[inline]
@@ -93,7 +92,7 @@ impl Iterator for TrueIdxIter<'_> {
     }
 }
 
-unsafe impl TrustedLen for TrueIdxIter<'_> {}
+unsafe impl<'a> TrustedLen for TrueIdxIter<'a> {}
 
 pub struct FastU32BitmapIter<'a> {
     bytes: &'a [u8],
@@ -143,7 +142,7 @@ impl<'a> FastU32BitmapIter<'a> {
     }
 }
 
-impl Iterator for FastU32BitmapIter<'_> {
+impl<'a> Iterator for FastU32BitmapIter<'a> {
     type Item = u32;
 
     #[inline]
@@ -171,9 +170,8 @@ impl Iterator for FastU32BitmapIter<'_> {
     }
 }
 
-unsafe impl TrustedLen for FastU32BitmapIter<'_> {}
+unsafe impl<'a> TrustedLen for FastU32BitmapIter<'a> {}
 
-#[derive(Clone)]
 pub struct FastU56BitmapIter<'a> {
     bytes: &'a [u8],
     shift: u32,
@@ -223,7 +221,7 @@ impl<'a> FastU56BitmapIter<'a> {
     }
 }
 
-impl Iterator for FastU56BitmapIter<'_> {
+impl<'a> Iterator for FastU56BitmapIter<'a> {
     type Item = u64;
 
     #[inline]
@@ -253,7 +251,7 @@ impl Iterator for FastU56BitmapIter<'_> {
     }
 }
 
-unsafe impl TrustedLen for FastU56BitmapIter<'_> {}
+unsafe impl<'a> TrustedLen for FastU56BitmapIter<'a> {}
 
 pub struct FastU64BitmapIter<'a> {
     bytes: &'a [u8],
@@ -318,7 +316,7 @@ impl<'a> FastU64BitmapIter<'a> {
     }
 }
 
-impl Iterator for FastU64BitmapIter<'_> {
+impl<'a> Iterator for FastU64BitmapIter<'a> {
     type Item = u64;
 
     #[inline]
@@ -350,7 +348,7 @@ impl Iterator for FastU64BitmapIter<'_> {
     }
 }
 
-unsafe impl TrustedLen for FastU64BitmapIter<'_> {}
+unsafe impl<'a> TrustedLen for FastU64BitmapIter<'a> {}
 
 /// This crates' equivalent of [`std::vec::IntoIter`] for [`Bitmap`].
 #[derive(Debug, Clone)]

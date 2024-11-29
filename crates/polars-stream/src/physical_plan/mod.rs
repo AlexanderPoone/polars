@@ -1,11 +1,9 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use polars_core::frame::DataFrame;
-use polars_core::prelude::{IdxSize, InitHashMaps, PlHashMap, SortMultipleOptions};
+use polars_core::prelude::{InitHashMaps, PlHashMap, SortMultipleOptions};
 use polars_core::schema::{Schema, SchemaRef};
 use polars_error::PolarsResult;
-use polars_ops::frame::JoinArgs;
 use polars_plan::plans::hive::HivePartitions;
 use polars_plan::plans::{AExpr, DataFrameUdf, FileInfo, FileScan, ScanSources, IR};
 use polars_plan::prelude::expr_ir::ExprIR;
@@ -16,7 +14,7 @@ mod lower_ir;
 mod to_graph;
 
 pub use fmt::visualize_plan;
-use polars_plan::prelude::{FileScanOptions, FileType};
+use polars_plan::prelude::FileScanOptions;
 use polars_utils::arena::{Arena, Node};
 use polars_utils::pl_str::PlSmallStr;
 use slotmap::{Key, SecondaryMap, SlotMap};
@@ -60,16 +58,6 @@ pub enum PhysNodeKind {
         extend_original: bool,
     },
 
-    WithRowIndex {
-        input: PhysNodeKey,
-        name: PlSmallStr,
-        offset: Option<IdxSize>,
-    },
-
-    InputIndependentSelect {
-        selectors: Vec<ExprIR>,
-    },
-
     Reduce {
         input: PhysNodeKey,
         exprs: Vec<ExprIR>,
@@ -95,15 +83,6 @@ pub enum PhysNodeKind {
         input: PhysNodeKey,
     },
 
-    FileSink {
-        path: Arc<PathBuf>,
-        file_type: FileType,
-        input: PhysNodeKey,
-    },
-
-    /// Generic fallback for (as-of-yet) unsupported streaming mappings.
-    /// Fully sinks all data to an in-memory data frame and uses the in-memory
-    /// engine to perform the map.
     InMemoryMap {
         input: PhysNodeKey,
         map: Arc<dyn DataFrameUdf>,
@@ -147,23 +126,6 @@ pub enum PhysNodeKind {
         scan_type: FileScan,
         file_options: FileScanOptions,
     },
-
-    GroupBy {
-        input: PhysNodeKey,
-        key: Vec<ExprIR>,
-        aggs: Vec<ExprIR>,
-    },
-
-    /// Generic fallback for (as-of-yet) unsupported streaming joins.
-    /// Fully sinks all data to in-memory data frames and uses the in-memory
-    /// engine to perform the join.
-    InMemoryJoin {
-        input_left: PhysNodeKey,
-        input_right: PhysNodeKey,
-        left_on: Vec<ExprIR>,
-        right_on: Vec<ExprIR>,
-        args: JoinArgs,
-    },
 }
 
 #[recursive::recursive]
@@ -194,33 +156,18 @@ fn insert_multiplexers(
 
     if !seen_before {
         match &phys_sm[node].kind {
-            PhysNodeKind::InMemorySource { .. }
-            | PhysNodeKind::FileScan { .. }
-            | PhysNodeKind::InputIndependentSelect { .. } => {},
+            PhysNodeKind::InMemorySource { .. } | PhysNodeKind::FileScan { .. } => {},
             PhysNodeKind::Select { input, .. }
-            | PhysNodeKind::WithRowIndex { input, .. }
             | PhysNodeKind::Reduce { input, .. }
             | PhysNodeKind::StreamingSlice { input, .. }
             | PhysNodeKind::Filter { input, .. }
             | PhysNodeKind::SimpleProjection { input, .. }
             | PhysNodeKind::InMemorySink { input }
-            | PhysNodeKind::FileSink { input, .. }
             | PhysNodeKind::InMemoryMap { input, .. }
             | PhysNodeKind::Map { input, .. }
             | PhysNodeKind::Sort { input, .. }
-            | PhysNodeKind::Multiplexer { input }
-            | PhysNodeKind::GroupBy { input, .. } => {
+            | PhysNodeKind::Multiplexer { input } => {
                 insert_multiplexers(*input, phys_sm, referenced);
-            },
-
-            PhysNodeKind::InMemoryJoin {
-                input_left,
-                input_right,
-                ..
-            } => {
-                let input_right = *input_right;
-                insert_multiplexers(*input_left, phys_sm, referenced);
-                insert_multiplexers(input_right, phys_sm, referenced);
             },
 
             PhysNodeKind::OrderedUnion { inputs } | PhysNodeKind::Zip { inputs, .. } => {

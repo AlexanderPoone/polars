@@ -5,7 +5,6 @@ import itertools
 import operator
 from dataclasses import dataclass
 from decimal import Decimal as D
-from math import ceil, floor
 from random import choice, randrange, seed
 from typing import Any, Callable, NamedTuple
 
@@ -323,52 +322,45 @@ def test_decimal_aggregations() -> None:
         "max": [D("10.10"), D("9000.12")],
     }
 
-    res = df.select(
+    assert df.select(
         sum=pl.sum("a"),
         min=pl.min("a"),
         max=pl.max("a"),
         mean=pl.mean("a"),
         median=pl.median("a"),
-    )
-    expected = pl.DataFrame(
-        {
-            "sum": [D("9110.33")],
-            "min": [D("0.10")],
-            "max": [D("9000.12")],
-            "mean": [2277.5825],
-            "median": [55.055],
-        }
-    )
-    assert_frame_equal(res, expected)
+    ).to_dict(as_series=False) == {
+        "sum": [D("9110.33")],
+        "min": [D("0.10")],
+        "max": [D("9000.12")],
+        "mean": [2277.5825],
+        "median": [55.055],
+    }
 
-    description = pl.DataFrame(
-        {
-            "statistic": [
-                "count",
-                "null_count",
-                "mean",
-                "std",
-                "min",
-                "25%",
-                "50%",
-                "75%",
-                "max",
-            ],
-            "g": [4.0, 0.0, 1.5, 0.5773502691896257, 1.0, 1.0, 2.0, 2.0, 2.0],
-            "a": [
-                4.0,
-                0.0,
-                2277.5825,
-                4481.916846516863,
-                0.1,
-                10.1,
-                100.01,
-                100.01,
-                9000.12,
-            ],
-        }
-    )
-    assert_frame_equal(df.describe(), description)
+    assert df.describe().to_dict(as_series=False) == {
+        "statistic": [
+            "count",
+            "null_count",
+            "mean",
+            "std",
+            "min",
+            "25%",
+            "50%",
+            "75%",
+            "max",
+        ],
+        "g": [4.0, 0.0, 1.5, 0.5773502691896257, 1.0, 1.0, 2.0, 2.0, 2.0],
+        "a": [
+            4.0,
+            0.0,
+            2277.5825,
+            4481.916846516863,
+            0.1,
+            10.1,
+            100.01,
+            100.01,
+            9000.12,
+        ],
+    }
 
 
 def test_decimal_df_vertical_sum() -> None:
@@ -530,21 +522,3 @@ def test_decimal_strict_scale_inference_17770() -> None:
     s = pl.Series(values, strict=True)
     assert s.dtype == pl.Decimal(precision=None, scale=4)
     assert s.to_list() == values
-
-
-def test_decimal_round() -> None:
-    dtype = pl.Decimal(3, 2)
-    values = [D(f"{float(v) / 100.:.02f}") for v in range(-150, 250, 1)]
-    i_s = pl.Series("a", values, dtype)
-
-    floor_s = pl.Series("a", [floor(v) for v in values], dtype)
-    ceil_s = pl.Series("a", [ceil(v) for v in values], dtype)
-
-    assert_series_equal(i_s.floor(), floor_s)
-    assert_series_equal(i_s.ceil(), ceil_s)
-
-    for decimals in range(10):
-        got_s = i_s.round(decimals)
-        expected_s = pl.Series("a", [round(v, decimals) for v in values], dtype)
-
-        assert_series_equal(got_s, expected_s)

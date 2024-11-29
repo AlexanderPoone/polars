@@ -3,8 +3,6 @@ mod case;
 #[cfg(feature = "strings")]
 mod concat;
 #[cfg(feature = "strings")]
-mod escape_regex;
-#[cfg(feature = "strings")]
 mod extract;
 #[cfg(feature = "find_many")]
 mod find_many;
@@ -19,18 +17,15 @@ mod reverse;
 #[cfg(feature = "strings")]
 mod split;
 #[cfg(feature = "strings")]
-mod starts_with;
-#[cfg(feature = "strings")]
 mod strip;
 #[cfg(feature = "strings")]
 mod substring;
+
 #[cfg(all(not(feature = "nightly"), feature = "strings"))]
 mod unicode_internals;
 
 #[cfg(feature = "strings")]
 pub use concat::*;
-#[cfg(feature = "strings")]
-pub use escape_regex::*;
 #[cfg(feature = "find_many")]
 pub use find_many::*;
 #[cfg(feature = "extract_jsonpath")]

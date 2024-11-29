@@ -1,5 +1,3 @@
-use std::sync::OnceLock;
-
 use polars_core::chunked_array::cast::CastOptions;
 use polars_core::prelude::*;
 
@@ -11,11 +9,10 @@ pub struct CastExpr {
     pub(crate) dtype: DataType,
     pub(crate) expr: Expr,
     pub(crate) options: CastOptions,
-    pub(crate) inlined_eval: OnceLock<Option<Column>>,
 }
 
 impl CastExpr {
-    fn finish(&self, input: &Column) -> PolarsResult<Column> {
+    fn finish(&self, input: &Series) -> PolarsResult<Series> {
         input.cast_with_options(&self.dtype, self.options)
     }
 }
@@ -25,21 +22,9 @@ impl PhysicalExpr for CastExpr {
         Some(&self.expr)
     }
 
-    fn evaluate(&self, df: &DataFrame, state: &ExecutionState) -> PolarsResult<Column> {
-        let column = self.input.evaluate(df, state)?;
-        self.finish(&column)
-    }
-
-    fn evaluate_inline_impl(&self, depth_limit: u8) -> Option<Column> {
-        self.inlined_eval
-            .get_or_init(|| {
-                let depth_limit = depth_limit.checked_sub(1)?;
-                self.input
-                    .evaluate_inline_impl(depth_limit)
-                    .filter(|x| x.len() == 1)
-                    .and_then(|x| self.finish(&x).ok())
-            })
-            .clone()
+    fn evaluate(&self, df: &DataFrame, state: &ExecutionState) -> PolarsResult<Series> {
+        let series = self.input.evaluate(df, state)?;
+        self.finish(&series)
     }
 
     #[allow(clippy::ptr_arg)]
@@ -55,18 +40,15 @@ impl PhysicalExpr for CastExpr {
             // this will not explode and potentially increase memory due to overlapping groups
             AggState::AggregatedList(s) => {
                 let ca = s.list().unwrap();
-                let casted = ca.apply_to_inner(&|s| {
-                    self.finish(&s.into_column())
-                        .map(|c| c.take_materialized_series())
-                })?;
-                ac.with_values(casted.into_column(), true, None)?;
+                let casted = ca.apply_to_inner(&|s| self.finish(&s))?;
+                ac.with_series(casted.into_series(), true, None)?;
             },
             AggState::AggregatedScalar(s) => {
-                let s = self.finish(&s.clone().into_column())?;
+                let s = self.finish(s)?;
                 if ac.is_literal() {
                     ac.with_literal(s);
                 } else {
-                    ac.with_values(s, true, None)?;
+                    ac.with_series(s, true, None)?;
                 }
             },
             _ => {
@@ -74,12 +56,12 @@ impl PhysicalExpr for CastExpr {
                 ac.groups();
 
                 let s = ac.flat_naive();
-                let s = self.finish(&s.as_ref().clone().into_column())?;
+                let s = self.finish(s.as_ref())?;
 
                 if ac.is_literal() {
                     ac.with_literal(s);
                 } else {
-                    ac.with_values(s, false, None)?;
+                    ac.with_series(s, false, None)?;
                 }
             },
         }
@@ -109,17 +91,17 @@ impl PartitionedAggregation for CastExpr {
         df: &DataFrame,
         groups: &GroupsProxy,
         state: &ExecutionState,
-    ) -> PolarsResult<Column> {
+    ) -> PolarsResult<Series> {
         let e = self.input.as_partitioned_aggregator().unwrap();
         self.finish(&e.evaluate_partitioned(df, groups, state)?)
     }
 
     fn finalize(
         &self,
-        partitioned: Column,
+        partitioned: Series,
         groups: &GroupsProxy,
         state: &ExecutionState,
-    ) -> PolarsResult<Column> {
+    ) -> PolarsResult<Series> {
         let agg = self.input.as_partitioned_aggregator().unwrap();
         agg.finalize(partitioned, groups, state)
     }

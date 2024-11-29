@@ -41,20 +41,17 @@ fn fma_ca<T: PolarsNumericType>(
     ChunkedArray::from_chunk_iter(a.name().clone(), chunks)
 }
 
-pub fn fma_columns(a: &Column, b: &Column, c: &Column) -> Column {
+pub fn fma_series(a: &Series, b: &Series, c: &Series) -> Series {
     if a.len() == b.len() && a.len() == c.len() {
         with_match_physical_numeric_polars_type!(a.dtype(), |$T| {
-            let a: &ChunkedArray<$T> = a.as_materialized_series().as_ref().as_ref().as_ref();
-            let b: &ChunkedArray<$T> = b.as_materialized_series().as_ref().as_ref().as_ref();
-            let c: &ChunkedArray<$T> = c.as_materialized_series().as_ref().as_ref().as_ref();
+            let a: &ChunkedArray<$T> = a.as_ref().as_ref().as_ref();
+            let b: &ChunkedArray<$T> = b.as_ref().as_ref().as_ref();
+            let c: &ChunkedArray<$T> = c.as_ref().as_ref().as_ref();
 
-            fma_ca(a, b, c).into_column()
+            fma_ca(a, b, c).into_series()
         })
     } else {
-        (a.as_materialized_series()
-            + &(b.as_materialized_series() * c.as_materialized_series()).unwrap())
-            .unwrap()
-            .into()
+        (a + &(b * c).unwrap()).unwrap()
     }
 }
 
@@ -95,20 +92,17 @@ fn fsm_ca<T: PolarsNumericType>(
     ChunkedArray::from_chunk_iter(a.name().clone(), chunks)
 }
 
-pub fn fsm_columns(a: &Column, b: &Column, c: &Column) -> Column {
+pub fn fsm_series(a: &Series, b: &Series, c: &Series) -> Series {
     if a.len() == b.len() && a.len() == c.len() {
         with_match_physical_numeric_polars_type!(a.dtype(), |$T| {
-            let a: &ChunkedArray<$T> = a.as_materialized_series().as_ref().as_ref().as_ref();
-            let b: &ChunkedArray<$T> = b.as_materialized_series().as_ref().as_ref().as_ref();
-            let c: &ChunkedArray<$T> = c.as_materialized_series().as_ref().as_ref().as_ref();
+            let a: &ChunkedArray<$T> = a.as_ref().as_ref().as_ref();
+            let b: &ChunkedArray<$T> = b.as_ref().as_ref().as_ref();
+            let c: &ChunkedArray<$T> = c.as_ref().as_ref().as_ref();
 
-            fsm_ca(a, b, c).into_column()
+            fsm_ca(a, b, c).into_series()
         })
     } else {
-        (a.as_materialized_series()
-            - &(b.as_materialized_series() * c.as_materialized_series()).unwrap())
-            .unwrap()
-            .into()
+        (a - &(b * c).unwrap()).unwrap()
     }
 }
 
@@ -148,19 +142,16 @@ fn fms_ca<T: PolarsNumericType>(
     ChunkedArray::from_chunk_iter(a.name().clone(), chunks)
 }
 
-pub fn fms_columns(a: &Column, b: &Column, c: &Column) -> Column {
+pub fn fms_series(a: &Series, b: &Series, c: &Series) -> Series {
     if a.len() == b.len() && a.len() == c.len() {
         with_match_physical_numeric_polars_type!(a.dtype(), |$T| {
-            let a: &ChunkedArray<$T> = a.as_materialized_series().as_ref().as_ref().as_ref();
-            let b: &ChunkedArray<$T> = b.as_materialized_series().as_ref().as_ref().as_ref();
-            let c: &ChunkedArray<$T> = c.as_materialized_series().as_ref().as_ref().as_ref();
+            let a: &ChunkedArray<$T> = a.as_ref().as_ref().as_ref();
+            let b: &ChunkedArray<$T> = b.as_ref().as_ref().as_ref();
+            let c: &ChunkedArray<$T> = c.as_ref().as_ref().as_ref();
 
-            fms_ca(a, b, c).into_column()
+            fms_ca(a, b, c).into_series()
         })
     } else {
-        (&(a.as_materialized_series() * b.as_materialized_series()).unwrap()
-            - c.as_materialized_series())
-        .unwrap()
-        .into()
+        (&(a * b).unwrap() - c).unwrap()
     }
 }

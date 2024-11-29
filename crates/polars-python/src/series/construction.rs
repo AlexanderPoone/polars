@@ -71,11 +71,10 @@ impl PySeries {
         if nan_is_null {
             let array = array.readonly();
             let vals = array.as_slice().unwrap();
-            let ca: Float32Chunked = py.allow_threads(|| {
-                vals.iter()
-                    .map(|&val| if f32::is_nan(val) { None } else { Some(val) })
-                    .collect_trusted()
-            });
+            let ca: Float32Chunked = vals
+                .iter()
+                .map(|&val| if f32::is_nan(val) { None } else { Some(val) })
+                .collect_trusted();
             ca.with_name(name.into()).into_series().into()
         } else {
             mmap_numpy_array(py, name, array)
@@ -87,11 +86,10 @@ impl PySeries {
         if nan_is_null {
             let array = array.readonly();
             let vals = array.as_slice().unwrap();
-            let ca: Float64Chunked = py.allow_threads(|| {
-                vals.iter()
-                    .map(|&val| if f64::is_nan(val) { None } else { Some(val) })
-                    .collect_trusted()
-            });
+            let ca: Float64Chunked = vals
+                .iter()
+                .map(|&val| if f64::is_nan(val) { None } else { Some(val) })
+                .collect_trusted();
             ca.with_name(name.into()).into_series().into()
         } else {
             mmap_numpy_array(py, name, array)
@@ -170,24 +168,13 @@ init_method_opt!(new_opt_i64, Int64Type, i64);
 init_method_opt!(new_opt_f32, Float32Type, f32);
 init_method_opt!(new_opt_f64, Float64Type, f64);
 
-fn convert_to_avs<'a>(
-    values: &'a Bound<'a, PyAny>,
-    strict: bool,
-    allow_object: bool,
-) -> PyResult<Vec<AnyValue<'a>>> {
-    values
-        .iter()?
-        .map(|v| py_object_to_any_value(&(v?).as_borrowed(), strict, allow_object))
-        .collect()
-}
-
 #[pymethods]
 impl PySeries {
     #[staticmethod]
     fn new_from_any_values(name: &str, values: &Bound<PyAny>, strict: bool) -> PyResult<Self> {
         let any_values_result = values
             .iter()?
-            .map(|v| py_object_to_any_value(&(v?).as_borrowed(), strict, true))
+            .map(|v| py_object_to_any_value(&(v?).as_borrowed(), strict))
             .collect::<PyResult<Vec<AnyValue>>>();
         let result = any_values_result.and_then(|avs| {
             let s = Series::from_any_values(name.into(), avs.as_slice(), strict).map_err(|e| {
@@ -224,13 +211,17 @@ impl PySeries {
         dtype: Wrap<DataType>,
         strict: bool,
     ) -> PyResult<Self> {
-        let avs = convert_to_avs(values, strict, false)?;
-        let s = Series::from_any_values_and_dtype(name.into(), avs.as_slice(), &dtype.0, strict)
-            .map_err(|e| {
-                PyTypeError::new_err(format!(
+        let any_values = values
+            .iter()?
+            .map(|v| py_object_to_any_value(&(v?).as_borrowed(), strict))
+            .collect::<PyResult<Vec<AnyValue>>>()?;
+        let s =
+            Series::from_any_values_and_dtype(name.into(), any_values.as_slice(), &dtype.0, strict)
+                .map_err(|e| {
+                    PyTypeError::new_err(format!(
                 "{e}\n\nHint: Try setting `strict=False` to allow passing data with mixed types."
             ))
-            })?;
+                })?;
         Ok(s.into())
     }
 

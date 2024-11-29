@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::io::{Read, Seek};
 
-use polars_error::{polars_ensure, polars_err, PolarsResult};
+use polars_error::{polars_err, PolarsResult};
 
 use super::super::super::IpcField;
 use super::super::deserialize::{read, skip};
@@ -41,7 +41,6 @@ pub fn read_fixed_size_list<R: Read + Seek>(
     )?;
 
     let (field, size) = FixedSizeListArray::get_child_and_size(&dtype);
-    polars_ensure!(size > 0, nyi = "Cannot read zero sized arrays from IPC");
 
     let limit = limit.map(|x| x.saturating_mul(size));
 
@@ -60,7 +59,7 @@ pub fn read_fixed_size_list<R: Read + Seek>(
         version,
         scratch,
     )?;
-    FixedSizeListArray::try_new(dtype, values.len() / size, values, validity)
+    FixedSizeListArray::try_new(dtype, values, validity)
 }
 
 pub fn skip_fixed_size_list(

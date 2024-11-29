@@ -2,10 +2,10 @@ use std::io::Write;
 
 #[cfg(feature = "async")]
 use futures::AsyncWrite;
-use polars_parquet_format::thrift::protocol::TCompactOutputProtocol;
+use parquet_format_safe::thrift::protocol::TCompactOutputProtocol;
 #[cfg(feature = "async")]
-use polars_parquet_format::thrift::protocol::TCompactOutputStreamProtocol;
-use polars_parquet_format::{ColumnChunk, ColumnMetaData, Type};
+use parquet_format_safe::thrift::protocol::TCompactOutputStreamProtocol;
+use parquet_format_safe::{ColumnChunk, ColumnMetaData, Type};
 use polars_utils::aliases::PlHashSet;
 
 #[cfg(feature = "async")]
@@ -195,8 +195,6 @@ fn build_column_chunk(
         statistics,
         encoding_stats: None,
         bloom_filter_offset: None,
-        bloom_filter_length: None,
-        size_statistics: None,
     };
 
     Ok(ColumnChunk {

@@ -152,6 +152,5 @@ check-wasm:  ## Check wasm build without supported features
 		--exclude-features parquet            \
 		--exclude-features performant         \
 		--exclude-features streaming          \
-		--exclude-features http               \
-		--exclude-features full               \
+		--exclude-features http          	  \
 		--exclude-features test

@@ -4,7 +4,6 @@ from datetime import date, datetime, time, timedelta
 
 import numpy as np
 import pandas as pd
-import pytest
 
 import polars as pl
 from polars.testing import assert_frame_equal
@@ -111,7 +110,6 @@ def test_maintain_order_after_sampling() -> None:
     assert result.to_dict(as_series=False) == expected
 
 
-@pytest.mark.may_fail_auto_streaming
 def test_sorted_group_by_optimization() -> None:
     df = pl.DataFrame({"a": np.random.randint(0, 5, 20)})
 

@@ -42,7 +42,6 @@ _temporal_conversions: dict[str, Callable[..., datetime | date]] = {
 def scan_iceberg(
     source: str | Table,
     *,
-    snapshot_id: int | None = None,
     storage_options: dict[str, Any] | None = None,
 ) -> LazyFrame:
     """
@@ -55,8 +54,6 @@ def scan_iceberg(
 
         Note: For Local filesystem, absolute and relative paths are supported but
         for the supported object storages - GCS, Azure and S3 full URI must be provided.
-    snapshot_id
-        The snapshot ID to scan from.
     storage_options
         Extra options for the storage backends supported by `pyiceberg`.
         For cloud storages, this may include configurations for authentication etc.
@@ -129,12 +126,6 @@ def scan_iceberg(
     >>> pl.scan_iceberg(
     ...     table_path, storage_options=storage_options
     ... ).collect()  # doctest: +SKIP
-
-    Creates a scan for an Iceberg table using a specific snapshot ID.
-
-    >>> table_path = "/path/to/iceberg-table/metadata.json"
-    >>> snapshot_id = 7051579356916758811
-    >>> pl.scan_iceberg(table_path, snapshot_id=snapshot_id).collect()  # doctest: +SKIP
     """
     from pyiceberg.io.pyarrow import schema_to_pyarrow
     from pyiceberg.table import StaticTable
@@ -144,13 +135,7 @@ def scan_iceberg(
             metadata_location=source, properties=storage_options or {}
         )
 
-    if snapshot_id is not None:
-        snapshot = source.snapshot_by_id(snapshot_id)
-        if snapshot is None:
-            msg = f"Snapshot ID not found: {snapshot_id}"
-            raise ValueError(msg)
-
-    func = partial(_scan_pyarrow_dataset_impl, source, snapshot_id=snapshot_id)
+    func = partial(_scan_pyarrow_dataset_impl, source)
     arrow_schema = schema_to_pyarrow(source.schema())
     return pl.LazyFrame._scan_python_function(arrow_schema, func, pyarrow=True)
 
@@ -160,7 +145,6 @@ def _scan_pyarrow_dataset_impl(
     with_columns: list[str] | None = None,
     predicate: str = "",
     n_rows: int | None = None,
-    snapshot_id: int | None = None,
     **kwargs: Any,
 ) -> DataFrame | Series:
     """
@@ -176,8 +160,6 @@ def _scan_pyarrow_dataset_impl(
         pyarrow expression that can be evaluated with eval
     n_rows:
         Materialize only n rows from the arrow dataset.
-    snapshot_id:
-        The snapshot ID to scan from.
     batch_size
         The maximum row count for scanned pyarrow record batches.
     kwargs:
@@ -189,7 +171,7 @@ def _scan_pyarrow_dataset_impl(
     """
     from polars import from_arrow
 
-    scan = tbl.scan(limit=n_rows, snapshot_id=snapshot_id)
+    scan = tbl.scan(limit=n_rows)
 
     if with_columns is not None:
         scan = scan.select(*with_columns)

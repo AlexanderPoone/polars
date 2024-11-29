@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 
 import polars._reexport as pl
 from polars import functions as F

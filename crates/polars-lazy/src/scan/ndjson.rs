@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
 
 use polars_core::prelude::*;
 use polars_io::cloud::CloudOptions;
@@ -137,7 +137,6 @@ impl LazyFileListReader for LazyJsonLineReader {
             },
             glob: true,
             include_file_paths: self.include_file_paths,
-            allow_missing_columns: false,
         };
 
         let options = NDJsonReadOptions {
@@ -156,11 +155,10 @@ impl LazyFileListReader for LazyJsonLineReader {
         };
 
         Ok(LazyFrame::from(DslPlan::Scan {
-            sources: self.sources,
-            file_info: None,
+            sources: Arc::new(Mutex::new(self.sources.to_dsl(false))),
+            file_info: Arc::new(RwLock::new(None)),
             file_options,
             scan_type,
-            cached_ir: Default::default(),
         }))
     }
 

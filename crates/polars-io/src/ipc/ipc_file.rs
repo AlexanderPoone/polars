@@ -1,6 +1,6 @@
 //! # (De)serializing Arrows IPC format.
 //!
-//! Arrow IPC is a [binary format](https://arrow.apache.org/docs/python/ipc.html).
+//! Arrow IPC is a [binary format format](https://arrow.apache.org/docs/python/ipc.html).
 //! It is the recommended way to serialize and deserialize Polars DataFrames as this is most true
 //! to the data schema.
 //!
@@ -12,8 +12,8 @@
 //! use std::io::Cursor;
 //!
 //!
-//! let s0 = Column::new("days".into(), &[0, 1, 2, 3, 4]);
-//! let s1 = Column::new("temp".into(), &[22.1, 19.9, 7., 2., 3.]);
+//! let s0 = Series::new("days".into(), &[0, 1, 2, 3, 4]);
+//! let s1 = Series::new("temp".into(), &[22.1, 19.9, 7., 2., 3.]);
 //! let mut df = DataFrame::new(vec![s0, s1]).unwrap();
 //!
 //! // Create an in memory file handler.
@@ -298,14 +298,7 @@ impl<R: MmapBytesReader> SerReader<R> for IpcReader<R> {
 
         if let Some((col, value)) = include_file_path {
             unsafe {
-                df.with_column_unchecked(Column::new_scalar(
-                    col,
-                    Scalar::new(
-                        DataType::String,
-                        AnyValue::StringOwned(value.as_ref().into()),
-                    ),
-                    row_count,
-                ))
+                df.with_column_unchecked(StringChunked::full(col, &value, row_count).into_series())
             };
         }
 

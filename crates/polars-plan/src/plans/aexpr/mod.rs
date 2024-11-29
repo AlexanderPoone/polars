@@ -44,14 +44,12 @@ pub enum IRAggExpr {
     Quantile {
         expr: Node,
         quantile: Node,
-        method: QuantileMethod,
+        interpol: QuantileInterpolOptions,
     },
     Sum(Node),
     Count(Node, bool),
     Std(Node, u8),
     Var(Node, u8),
-    #[cfg(feature = "bitwise")]
-    Bitwise(Node, BitwiseAggFunction),
     AggGroups(Node),
 }
 
@@ -62,12 +60,8 @@ impl Hash for IRAggExpr {
             Self::Min { propagate_nans, .. } | Self::Max { propagate_nans, .. } => {
                 propagate_nans.hash(state)
             },
-            Self::Quantile {
-                method: interpol, ..
-            } => interpol.hash(state),
+            Self::Quantile { interpol, .. } => interpol.hash(state),
             Self::Std(_, v) | Self::Var(_, v) => v.hash(state),
-            #[cfg(feature = "bitwise")]
-            Self::Bitwise(_, f) => f.hash(state),
             _ => {},
         }
     }
@@ -94,11 +88,9 @@ impl IRAggExpr {
                     propagate_nans: r, ..
                 },
             ) => l == r,
-            (Quantile { method: l, .. }, Quantile { method: r, .. }) => l == r,
+            (Quantile { interpol: l, .. }, Quantile { interpol: r, .. }) => l == r,
             (Std(_, l), Std(_, r)) => l == r,
             (Var(_, l), Var(_, r)) => l == r,
-            #[cfg(feature = "bitwise")]
-            (Bitwise(_, l), Bitwise(_, r)) => l == r,
             _ => std::mem::discriminant(self) == std::mem::discriminant(other),
         }
     }
@@ -132,8 +124,6 @@ impl From<IRAggExpr> for GroupByMethod {
             Count(_, include_nulls) => GroupByMethod::Count { include_nulls },
             Std(_, ddof) => GroupByMethod::Std(ddof),
             Var(_, ddof) => GroupByMethod::Var(ddof),
-            #[cfg(feature = "bitwise")]
-            Bitwise(_, f) => GroupByMethod::Bitwise(f.into()),
             AggGroups(_) => GroupByMethod::Groups,
             Quantile { .. } => unreachable!(),
         }
@@ -184,7 +174,7 @@ pub enum AExpr {
     },
     AnonymousFunction {
         input: Vec<ExprIR>,
-        function: OpaqueColumnUdf,
+        function: SpecialEq<Arc<dyn SeriesUdf>>,
         output_type: GetOutput,
         options: FunctionOptions,
     },
@@ -192,7 +182,7 @@ pub enum AExpr {
         /// Function arguments
         /// Some functions rely on aliases,
         /// for instance assignment of struct fields.
-        /// Therefor we need [`ExprIr`].
+        /// Therefor we need `[ExprIr]`.
         input: Vec<ExprIR>,
         /// function to apply
         function: FunctionExpr,

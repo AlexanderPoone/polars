@@ -453,7 +453,7 @@ impl<T: TotalOrd, U: TotalOrd> TotalOrd for (T, U) {
     }
 }
 
-impl TotalHash for BytesHash<'_> {
+impl<'a> TotalHash for BytesHash<'a> {
     #[inline(always)]
     fn tot_hash<H>(&self, state: &mut H)
     where
@@ -463,7 +463,7 @@ impl TotalHash for BytesHash<'_> {
     }
 }
 
-impl TotalEq for BytesHash<'_> {
+impl<'a> TotalEq for BytesHash<'a> {
     #[inline(always)]
     fn tot_eq(&self, other: &Self) -> bool {
         self == other
@@ -472,7 +472,7 @@ impl TotalEq for BytesHash<'_> {
 
 /// This elides creating a [`TotalOrdWrap`] for types that don't need it.
 pub trait ToTotalOrd {
-    type TotalOrdItem: Hash + Eq;
+    type TotalOrdItem;
     type SourceItem;
 
     fn to_total_ord(&self) -> Self::TotalOrdItem;
@@ -564,7 +564,7 @@ impl_to_total_ord_wrapped!(f64);
 /// `TotalOrdWrap<Option<T>>` implements `Eq + Hash`, iff:
 /// `Option<T>` implements `TotalEq + TotalHash`, iff:
 /// `T` implements `TotalEq + TotalHash`
-impl<T: Copy + TotalEq + TotalHash> ToTotalOrd for Option<T> {
+impl<T: Copy> ToTotalOrd for Option<T> {
     type TotalOrdItem = TotalOrdWrap<Option<T>>;
     type SourceItem = Option<T>;
 

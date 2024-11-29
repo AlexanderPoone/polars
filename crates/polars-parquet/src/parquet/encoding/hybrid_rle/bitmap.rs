@@ -39,7 +39,7 @@ impl<'a> BitmapIter<'a> {
     }
 }
 
-impl Iterator for BitmapIter<'_> {
+impl<'a> Iterator for BitmapIter<'a> {
     type Item = bool;
 
     #[inline]

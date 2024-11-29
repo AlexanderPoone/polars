@@ -107,7 +107,7 @@ impl private::PrivateSeries for SeriesWrap<TimeChunked> {
 
     fn arg_sort_multiple(
         &self,
-        by: &[Column],
+        by: &[Series],
         options: &SortMultipleOptions,
     ) -> PolarsResult<IdxCa> {
         self.0.deref().arg_sort_multiple(by, options)
@@ -290,20 +290,21 @@ impl SeriesTrait for SeriesWrap<TimeChunked> {
 
     fn max_reduce(&self) -> PolarsResult<Scalar> {
         let sc = self.0.max_reduce();
-        let av = sc.value().cast(self.dtype()).into_static();
+        let av = sc.value().cast(self.dtype()).into_static().unwrap();
         Ok(Scalar::new(self.dtype().clone(), av))
     }
 
     fn min_reduce(&self) -> PolarsResult<Scalar> {
         let sc = self.0.min_reduce();
-        let av = sc.value().cast(self.dtype()).into_static();
+        let av = sc.value().cast(self.dtype()).into_static().unwrap();
         Ok(Scalar::new(self.dtype().clone(), av))
     }
 
     fn median_reduce(&self) -> PolarsResult<Scalar> {
         let av = AnyValue::from(self.median().map(|v| v as i64))
             .cast(self.dtype())
-            .into_static();
+            .into_static()
+            .unwrap();
         Ok(Scalar::new(self.dtype().clone(), av))
     }
 

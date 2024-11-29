@@ -204,7 +204,6 @@ pub fn hive_partitions_from_paths(
         .into_iter()
         .map(|x| x.into_series())
         .collect::<PolarsResult<Vec<_>>>()?;
-
     buffers.sort_by_key(|s| reader_schema.index_of(s.name()).unwrap_or(usize::MAX));
 
     #[allow(clippy::needless_range_loop)]
@@ -232,16 +231,19 @@ pub fn hive_partitions_from_paths(
 }
 
 /// Determine the path separator for identifying Hive partitions.
-fn separator(url: &Path) -> &[char] {
-    if cfg!(target_family = "windows") {
-        if polars_io::path_utils::is_cloud_url(url) {
-            &['/']
-        } else {
-            &['/', '\\']
-        }
+#[cfg(target_os = "windows")]
+fn separator(url: &Path) -> char {
+    if polars_io::path_utils::is_cloud_url(url) {
+        '/'
     } else {
-        &['/']
+        '\\'
     }
+}
+
+/// Determine the path separator for identifying Hive partitions.
+#[cfg(not(target_os = "windows"))]
+fn separator(_url: &Path) -> char {
+    '/'
 }
 
 /// Parse a Hive partition string (e.g. "column=1.5") into a name and value part.

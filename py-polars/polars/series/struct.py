@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from polars._utils.various import BUILDING_SPHINX_DOCS, sphinx_accessor
 from polars._utils.wrap import wrap_df
@@ -8,8 +8,6 @@ from polars.schema import Schema
 from polars.series.utils import expr_dispatch
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from polars import DataFrame, Series
     from polars.polars import PySeries
 elif BUILDING_SPHINX_DOCS:
@@ -22,7 +20,7 @@ class StructNameSpace:
 
     _accessor = "struct"
 
-    def __init__(self, series: Series) -> None:
+    def __init__(self, series: Series):
         self._s: PySeries = series._s
 
     def __getitem__(self, item: int | str) -> Series:
@@ -107,7 +105,7 @@ class StructNameSpace:
             return Schema({})
 
         schema = self._s.dtype().to_schema()
-        return Schema(schema, check_dtypes=False)
+        return Schema(schema)
 
     def unnest(self) -> DataFrame:
         """

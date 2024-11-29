@@ -2,10 +2,6 @@
   "includes": [
     "**/*.{md,toml,json}"
   ],
-  "markdown": {
-    "lineWidth": 100,
-    "textWrap": "always"
-  },
   "excludes": [
     ".venv/",
     "**/target/",

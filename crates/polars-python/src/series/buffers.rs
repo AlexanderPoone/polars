@@ -82,9 +82,9 @@ impl PySeries {
     }
 
     /// Return the underlying values, validity, and offsets buffers as Series.
-    fn _get_buffers(&self, py: Python) -> PyResult<(Self, Option<Self>, Option<Self>)> {
+    fn _get_buffers(&self) -> PyResult<(Self, Option<Self>, Option<Self>)> {
         let s = &self.series;
-        py.allow_threads(|| match s.dtype().to_physical() {
+        match s.dtype().to_physical() {
             dt if dt.is_numeric() => get_buffers_from_primitive(s),
             DataType::Boolean => get_buffers_from_primitive(s),
             DataType::String => get_buffers_from_string(s),
@@ -92,7 +92,7 @@ impl PySeries {
                 let msg = format!("`_get_buffers` not implemented for `dtype` {dt}");
                 Err(PyTypeError::new_err(msg))
             },
-        })
+        }
     }
 }
 
@@ -129,7 +129,7 @@ fn get_buffers_from_string(s: &Series) -> PyResult<(PySeries, Option<PySeries>, 
     let arr_binview = ca.downcast_iter().next().unwrap();
 
     // This is not zero-copy
-    let arr_utf8 = polars_core::export::cast::utf8view_to_utf8(arr_binview);
+    let arr_utf8 = arrow::compute::cast::utf8view_to_utf8(arr_binview);
 
     let values = get_string_bytes(&arr_utf8)?;
     let validity = get_bitmap(&s);
@@ -251,9 +251,7 @@ fn get_boolean_buffer_length_in_bytes(length: usize, offset: usize) -> usize {
 impl PySeries {
     /// Construct a PySeries from information about its underlying buffers.
     #[staticmethod]
-    #[pyo3(signature = (dtype, data, validity=None))]
     unsafe fn _from_buffers(
-        py: Python,
         dtype: Wrap<DataType>,
         data: Vec<PySeries>,
         validity: Option<PySeries>,
@@ -321,7 +319,7 @@ impl PySeries {
                     )),
                 };
                 let values = series_to_buffer::<UInt8Type>(values);
-                py.allow_threads(|| from_buffers_string_impl(values, validity, offsets))?
+                from_buffers_string_impl(values, validity, offsets)?
             },
             dt => {
                 let msg = format!("`_from_buffers` not implemented for `dtype` {dt}");
@@ -339,13 +337,12 @@ where
     T: PolarsNumericType,
 {
     let ca: &ChunkedArray<T> = s.as_ref().as_ref();
-    let ca = ca.rechunk();
     let arr = ca.downcast_iter().next().unwrap();
     arr.values().clone()
 }
 fn series_to_bitmap(s: Series) -> PyResult<Bitmap> {
     let ca_result = s.bool();
-    let ca = ca_result.map_err(PyPolarsErr::from)?.rechunk();
+    let ca = ca_result.map_err(PyPolarsErr::from)?;
     let arr = ca.downcast_iter().next().unwrap();
     let bitmap = arr.values().clone();
     Ok(bitmap)

@@ -61,14 +61,13 @@ where
     ca
 }
 
-impl<T, Rhs> ChunkCompareEq<Rhs> for ChunkedArray<T>
+impl<T, Rhs> ChunkCompare<Rhs> for ChunkedArray<T>
 where
     T: PolarsNumericType,
     Rhs: ToPrimitive,
     T::Array: TotalOrdKernel<Scalar = T::Native> + TotalEqKernel<Scalar = T::Native>,
 {
     type Item = BooleanChunked;
-
     fn equal(&self, rhs: Rhs) -> BooleanChunked {
         let rhs: T::Native = NumCast::from(rhs).unwrap();
         let fa = Some(|x: T::Native| x.tot_ge(&rhs));
@@ -112,15 +111,6 @@ where
             })
         }
     }
-}
-
-impl<T, Rhs> ChunkCompareIneq<Rhs> for ChunkedArray<T>
-where
-    T: PolarsNumericType,
-    Rhs: ToPrimitive,
-    T::Array: TotalOrdKernel<Scalar = T::Native> + TotalEqKernel<Scalar = T::Native>,
-{
-    type Item = BooleanChunked;
 
     fn gt(&self, rhs: Rhs) -> BooleanChunked {
         let rhs: T::Native = NumCast::from(rhs).unwrap();
@@ -167,7 +157,7 @@ where
     }
 }
 
-impl ChunkCompareEq<&[u8]> for BinaryChunked {
+impl ChunkCompare<&[u8]> for BinaryChunked {
     type Item = BooleanChunked;
 
     fn equal(&self, rhs: &[u8]) -> BooleanChunked {
@@ -185,10 +175,6 @@ impl ChunkCompareEq<&[u8]> for BinaryChunked {
     fn not_equal_missing(&self, rhs: &[u8]) -> BooleanChunked {
         arity::unary_mut_with_options(self, |arr| arr.tot_ne_missing_kernel_broadcast(rhs).into())
     }
-}
-
-impl ChunkCompareIneq<&[u8]> for BinaryChunked {
-    type Item = BooleanChunked;
 
     fn gt(&self, rhs: &[u8]) -> BooleanChunked {
         arity::unary_mut_values(self, |arr| arr.tot_gt_kernel_broadcast(rhs).into())
@@ -207,7 +193,7 @@ impl ChunkCompareIneq<&[u8]> for BinaryChunked {
     }
 }
 
-impl ChunkCompareEq<&str> for StringChunked {
+impl ChunkCompare<&str> for StringChunked {
     type Item = BooleanChunked;
 
     fn equal(&self, rhs: &str) -> BooleanChunked {
@@ -225,10 +211,6 @@ impl ChunkCompareEq<&str> for StringChunked {
     fn not_equal_missing(&self, rhs: &str) -> BooleanChunked {
         arity::unary_mut_with_options(self, |arr| arr.tot_ne_missing_kernel_broadcast(rhs).into())
     }
-}
-
-impl ChunkCompareIneq<&str> for StringChunked {
-    type Item = BooleanChunked;
 
     fn gt(&self, rhs: &str) -> BooleanChunked {
         arity::unary_mut_values(self, |arr| arr.tot_gt_kernel_broadcast(rhs).into())

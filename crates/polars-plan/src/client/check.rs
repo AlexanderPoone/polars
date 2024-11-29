@@ -6,9 +6,6 @@ use crate::plans::{DslPlan, FileScan, ScanSources};
 
 /// Assert that the given [`DslPlan`] is eligible to be executed on Polars Cloud.
 pub(super) fn assert_cloud_eligible(dsl: &DslPlan) -> PolarsResult<()> {
-    if std::env::var("POLARS_SKIP_CLIENT_CHECK").as_deref() == Ok("1") {
-        return Ok(());
-    }
     for plan_node in dsl.into_iter() {
         match plan_node {
             #[cfg(feature = "python")]
@@ -16,7 +13,8 @@ pub(super) fn assert_cloud_eligible(dsl: &DslPlan) -> PolarsResult<()> {
             DslPlan::Scan {
                 sources, scan_type, ..
             } => {
-                match sources {
+                let sources_lock = sources.lock().unwrap();
+                match &sources_lock.sources {
                     ScanSources::Paths(paths) => {
                         if paths.iter().any(|p| !is_cloud_url(p)) {
                             return ineligible_error("contains scan of local file system");

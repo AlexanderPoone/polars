@@ -132,13 +132,11 @@ where
     }
 
     fn take(&self, indices: &IdxCa) -> PolarsResult<Series> {
-        let ca = self.rechunk_object();
-        Ok(ca.take(indices)?.into_series())
+        Ok(self.0.take(indices)?.into_series())
     }
 
     unsafe fn take_unchecked(&self, indices: &IdxCa) -> Series {
-        let ca = self.rechunk_object();
-        ca.take_unchecked(indices).into_series()
+        self.0.take_unchecked(indices).into_series()
     }
 
     fn take_slice(&self, indices: &[IdxSize]) -> PolarsResult<Series> {

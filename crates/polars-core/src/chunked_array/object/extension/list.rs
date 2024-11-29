@@ -18,7 +18,7 @@ impl<T: PolarsObject> ObjectChunked<T> {
     }
 }
 
-pub(crate) struct ExtensionListBuilder<T: PolarsObject> {
+struct ExtensionListBuilder<T: PolarsObject> {
     values_builder: ObjectChunkedBuilder<T>,
     offsets: Vec<i64>,
     fast_explode: bool,

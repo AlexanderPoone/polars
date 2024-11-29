@@ -32,7 +32,6 @@ impl PyArrowPrimitiveType for Float32Type {}
 impl PyArrowPrimitiveType for Float64Type {}
 
 fn iterator_to_struct<'a>(
-    py: Python,
     it: impl Iterator<Item = Option<Bound<'a, PyAny>>>,
     init_null_count: usize,
     first_value: AnyValue<'a>,
@@ -116,21 +115,17 @@ fn iterator_to_struct<'a>(
         }
     }
 
-    let fields = py.allow_threads(|| {
-        POOL.install(|| {
-            field_names_ordered
-                .par_iter()
-                .map(|name| Series::new(name.clone(), struct_fields.get(name).unwrap()))
-                .collect::<Vec<_>>()
-        })
+    let fields = POOL.install(|| {
+        field_names_ordered
+            .par_iter()
+            .map(|name| Series::new(name.clone(), struct_fields.get(name).unwrap()))
+            .collect::<Vec<_>>()
     });
 
-    Ok(
-        StructChunked::from_series(name, fields[0].len(), fields.iter())
-            .unwrap()
-            .into_series()
-            .into(),
-    )
+    Ok(StructChunked::from_series(name, &fields)
+        .unwrap()
+        .into_series()
+        .into())
 }
 
 fn iterator_to_primitive<T>(
@@ -260,7 +255,8 @@ fn iterator_to_list(
     name: PlSmallStr,
     capacity: usize,
 ) -> PyResult<ListChunked> {
-    let mut builder = get_list_builder(dt, capacity * 5, capacity, name);
+    let mut builder =
+        get_list_builder(dt, capacity * 5, capacity, name).map_err(PyPolarsErr::from)?;
     for _ in 0..init_null_count {
         builder.append_null()
     }

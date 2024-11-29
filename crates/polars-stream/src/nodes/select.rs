@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use polars_core::prelude::IntoColumn;
 use polars_core::schema::Schema;
 
 use super::compute_node_prelude::*;
@@ -36,14 +35,14 @@ impl ComputeNode for SelectNode {
     fn spawn<'env, 's>(
         &'env mut self,
         scope: &'s TaskScope<'s, 'env>,
-        recv_ports: &mut [Option<RecvPort<'_>>],
-        send_ports: &mut [Option<SendPort<'_>>],
+        recv: &mut [Option<RecvPort<'_>>],
+        send: &mut [Option<SendPort<'_>>],
         state: &'s ExecutionState,
         join_handles: &mut Vec<JoinHandle<PolarsResult<()>>>,
     ) {
-        assert!(recv_ports.len() == 1 && send_ports.len() == 1);
-        let receivers = recv_ports[0].take().unwrap().parallel();
-        let senders = send_ports[0].take().unwrap().parallel();
+        assert!(recv.len() == 1 && send.len() == 1);
+        let receivers = recv[0].take().unwrap().parallel();
+        let senders = send[0].take().unwrap().parallel();
 
         for (mut recv, mut send) in receivers.into_iter().zip(senders) {
             let slf = &*self;
@@ -53,7 +52,7 @@ impl ComputeNode for SelectNode {
                     let mut selected = Vec::new();
                     for selector in slf.selectors.iter() {
                         let s = selector.evaluate(&df, state).await?;
-                        selected.push(s.into_column());
+                        selected.push(s);
                     }
 
                     let ret = if slf.extend_original {

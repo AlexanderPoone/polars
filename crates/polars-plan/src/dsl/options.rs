@@ -5,7 +5,6 @@ use polars_utils::pl_str::PlSmallStr;
 use polars_utils::IdxSize;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use strum_macros::IntoStaticStr;
 
 use crate::dsl::Selector;
 
@@ -88,9 +87,8 @@ impl Default for WindowType {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Default, Hash, IntoStaticStr)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[strum(serialize_all = "snake_case")]
 pub enum WindowMapping {
     /// Map the group values to the position
     #[default]
@@ -108,7 +106,7 @@ pub enum WindowMapping {
 pub enum NestedType {
     #[cfg(feature = "dtype-array")]
     Array,
-    // List,
+    List,
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Eq, Hash)]

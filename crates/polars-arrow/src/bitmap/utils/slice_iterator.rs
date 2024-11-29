@@ -74,7 +74,7 @@ impl<'a> SlicesIterator<'a> {
     }
 }
 
-impl Iterator for SlicesIterator<'_> {
+impl<'a> Iterator for SlicesIterator<'a> {
     type Item = (usize, usize);
 
     #[inline]

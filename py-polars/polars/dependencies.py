@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import re
 import sys
-from collections.abc import Hashable
-from functools import cache
+from functools import lru_cache
 from importlib import import_module
 from importlib.util import find_spec
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Hashable, cast
 
 _ALTAIR_AVAILABLE = True
 _DELTALAKE_AVAILABLE = True
@@ -150,7 +149,6 @@ if TYPE_CHECKING:
     import json
     import pickle
     import subprocess
-    import zoneinfo
 
     import altair
     import deltalake
@@ -163,6 +161,11 @@ if TYPE_CHECKING:
     import pyarrow
     import pydantic
     import pyiceberg
+
+    if sys.version_info >= (3, 9):
+        import zoneinfo
+    else:
+        from backports import zoneinfo
 else:
     # infrequently-used builtins
     dataclasses, _ = _lazy_import("dataclasses")
@@ -190,7 +193,7 @@ else:
     gevent, _GEVENT_AVAILABLE = _lazy_import("gevent")
 
 
-@cache
+@lru_cache(maxsize=None)
 def _might_be(cls: type, type_: str) -> bool:
     # infer whether the given class "might" be associated with the given
     # module (in which case it's reasonable to do a real isinstance check;

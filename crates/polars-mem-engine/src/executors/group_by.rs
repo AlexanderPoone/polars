@@ -7,7 +7,7 @@ pub(super) fn evaluate_aggs(
     aggs: &[Arc<dyn PhysicalExpr>],
     groups: &GroupsProxy,
     state: &ExecutionState,
-) -> PolarsResult<Vec<Column>> {
+) -> PolarsResult<Vec<Series>> {
     POOL.install(|| {
         aggs.par_iter()
             .map(|expr| {
@@ -56,7 +56,7 @@ impl GroupByExec {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn group_by_helper(
     mut df: DataFrame,
-    keys: Vec<Column>,
+    keys: Vec<Series>,
     aggs: &[Arc<dyn PhysicalExpr>],
     apply: Option<Arc<dyn DataFrameUdf>>,
     state: &ExecutionState,
@@ -88,8 +88,9 @@ pub(super) fn group_by_helper(
 
         rayon::join(get_columns, get_agg)
     });
+    let agg_columns = agg_columns?;
 
-    columns.extend(agg_columns?.into_iter().map(Column::from));
+    columns.extend_from_slice(&agg_columns);
     DataFrame::new(columns)
 }
 
@@ -98,7 +99,7 @@ impl GroupByExec {
         let keys = self
             .keys
             .iter()
-            .map(|e| e.evaluate(&df, state).map(Column::from))
+            .map(|e| e.evaluate(&df, state))
             .collect::<PolarsResult<_>>()?;
         group_by_helper(
             df,

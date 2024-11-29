@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use polars_utils::slice::GetSaferUnchecked;
+
 use super::{make_growable, Growable};
 use crate::array::growable::utils::{extend_validity, prepare_validity};
 use crate::array::{Array, ListArray};
@@ -12,7 +14,7 @@ unsafe fn extend_offset_values<O: Offset>(
     start: usize,
     len: usize,
 ) {
-    let array = growable.arrays.get_unchecked(index);
+    let array = growable.arrays[index];
     let offsets = array.offsets();
 
     growable
@@ -20,8 +22,11 @@ unsafe fn extend_offset_values<O: Offset>(
         .try_extend_from_slice(offsets, start, len)
         .unwrap();
 
-    let end = offsets.buffer().get_unchecked(start + len).to_usize();
-    let start = offsets.buffer().get_unchecked(start).to_usize();
+    let end = offsets
+        .buffer()
+        .get_unchecked_release(start + len)
+        .to_usize();
+    let start = offsets.buffer().get_unchecked_release(start).to_usize();
     let len = end - start;
     growable.values.extend(index, start, len);
 }
@@ -75,7 +80,7 @@ impl<'a, O: Offset> GrowableList<'a, O> {
 
 impl<'a, O: Offset> Growable<'a> for GrowableList<'a, O> {
     unsafe fn extend(&mut self, index: usize, start: usize, len: usize) {
-        let array = *self.arrays.get_unchecked(index);
+        let array = *self.arrays.get_unchecked_release(index);
         extend_validity(&mut self.validity, array, start, len);
         extend_offset_values::<O>(self, index, start, len);
     }

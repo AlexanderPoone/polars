@@ -18,61 +18,45 @@ pub fn deserialize_iter<'a>(
     dtype: ArrowDataType,
     buf_size: usize,
     count: usize,
-    allow_extra_fields_in_struct: bool,
 ) -> PolarsResult<ArrayRef> {
     let mut arr: Vec<Box<dyn Array>> = Vec::new();
-    let mut buf = Vec::with_capacity(std::cmp::min(buf_size + count + 2, u32::MAX as usize));
-    buf.push(b'[');
+    let mut buf = String::with_capacity(std::cmp::min(buf_size + count + 2, u32::MAX as usize));
+    buf.push('[');
 
-    fn _deserializer(
-        s: &mut [u8],
-        dtype: ArrowDataType,
-        allow_extra_fields_in_struct: bool,
-    ) -> PolarsResult<Box<dyn Array>> {
-        let out = simd_json::to_borrowed_value(s)
+    fn _deserializer(s: &mut str, dtype: ArrowDataType) -> PolarsResult<Box<dyn Array>> {
+        let slice = unsafe { s.as_bytes_mut() };
+        let out = simd_json::to_borrowed_value(slice)
             .map_err(|e| PolarsError::ComputeError(format!("json parsing error: '{e}'").into()))?;
-        if let BorrowedValue::Array(rows) = out {
-            super::super::json::deserialize::_deserialize(
-                &rows,
-                dtype.clone(),
-                allow_extra_fields_in_struct,
-            )
+        Ok(if let BorrowedValue::Array(rows) = out {
+            super::super::json::deserialize::_deserialize(&rows, dtype.clone())
         } else {
             unreachable!()
-        }
+        })
     }
     let mut row_iter = rows.peekable();
 
     while let Some(row) = row_iter.next() {
-        buf.extend_from_slice(row.as_bytes());
-        buf.push(b',');
+        buf.push_str(row);
+        buf.push(',');
 
         let next_row_length = row_iter.peek().map(|row| row.len()).unwrap_or(0);
         if buf.len() + next_row_length >= u32::MAX as usize {
             let _ = buf.pop();
-            buf.push(b']');
-            arr.push(_deserializer(
-                &mut buf,
-                dtype.clone(),
-                allow_extra_fields_in_struct,
-            )?);
+            buf.push(']');
+            arr.push(_deserializer(&mut buf, dtype.clone())?);
             buf.clear();
-            buf.push(b'[');
+            buf.push('[');
         }
     }
     if buf.len() > 1 {
         let _ = buf.pop();
     }
-    buf.push(b']');
+    buf.push(']');
 
     if arr.is_empty() {
-        _deserializer(&mut buf, dtype.clone(), allow_extra_fields_in_struct)
+        _deserializer(&mut buf, dtype.clone())
     } else {
-        arr.push(_deserializer(
-            &mut buf,
-            dtype.clone(),
-            allow_extra_fields_in_struct,
-        )?);
+        arr.push(_deserializer(&mut buf, dtype.clone())?);
         concatenate_owned_unchecked(&arr)
     }
 }

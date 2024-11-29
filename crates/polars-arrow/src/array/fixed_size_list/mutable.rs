@@ -14,7 +14,6 @@ use crate::datatypes::{ArrowDataType, Field};
 pub struct MutableFixedSizeListArray<M: MutableArray> {
     dtype: ArrowDataType,
     size: usize,
-    length: usize,
     values: M,
     validity: Option<MutableBitmap>,
 }
@@ -23,7 +22,6 @@ impl<M: MutableArray> From<MutableFixedSizeListArray<M>> for FixedSizeListArray 
     fn from(mut other: MutableFixedSizeListArray<M>) -> Self {
         FixedSizeListArray::new(
             other.dtype,
-            other.length,
             other.values.as_box(),
             other.validity.map(|x| x.into()),
         )
@@ -55,17 +53,10 @@ impl<M: MutableArray> MutableFixedSizeListArray<M> {
         };
         Self {
             size,
-            length: 0,
             dtype,
             values,
             validity: None,
         }
-    }
-
-    #[inline]
-    fn has_valid_invariants(&self) -> bool {
-        (self.size == 0 && self.values().len() == 0)
-            || (self.size > 0 && self.values.len() / self.size == self.length)
     }
 
     /// Returns the size (number of elements per slot) of this [`FixedSizeListArray`].
@@ -75,13 +66,17 @@ impl<M: MutableArray> MutableFixedSizeListArray<M> {
 
     /// The length of this array
     pub fn len(&self) -> usize {
-        debug_assert!(self.has_valid_invariants());
-        self.length
+        self.values.len() / self.size
     }
 
     /// The inner values
     pub fn values(&self) -> &M {
         &self.values
+    }
+
+    /// The values as a mutable reference
+    pub fn mut_values(&mut self) -> &mut M {
+        &mut self.values
     }
 
     fn init_validity(&mut self) {
@@ -103,10 +98,6 @@ impl<M: MutableArray> MutableFixedSizeListArray<M> {
         if let Some(validity) = &mut self.validity {
             validity.push(true)
         }
-        self.length += 1;
-
-        debug_assert!(self.has_valid_invariants());
-
         Ok(())
     }
 
@@ -117,9 +108,6 @@ impl<M: MutableArray> MutableFixedSizeListArray<M> {
         if let Some(validity) = &mut self.validity {
             validity.push(true)
         }
-        self.length += 1;
-
-        debug_assert!(self.has_valid_invariants());
     }
 
     #[inline]
@@ -129,9 +117,6 @@ impl<M: MutableArray> MutableFixedSizeListArray<M> {
             Some(validity) => validity.push(false),
             None => self.init_validity(),
         }
-        self.length += 1;
-
-        debug_assert!(self.has_valid_invariants());
     }
 
     /// Reserves `additional` slots.
@@ -153,8 +138,7 @@ impl<M: MutableArray> MutableFixedSizeListArray<M> {
 
 impl<M: MutableArray + 'static> MutableArray for MutableFixedSizeListArray<M> {
     fn len(&self) -> usize {
-        debug_assert!(self.has_valid_invariants());
-        self.length
+        self.values.len() / self.size
     }
 
     fn validity(&self) -> Option<&MutableBitmap> {
@@ -164,7 +148,6 @@ impl<M: MutableArray + 'static> MutableArray for MutableFixedSizeListArray<M> {
     fn as_box(&mut self) -> Box<dyn Array> {
         FixedSizeListArray::new(
             self.dtype.clone(),
-            self.length,
             self.values.as_box(),
             std::mem::take(&mut self.validity).map(|x| x.into()),
         )
@@ -174,7 +157,6 @@ impl<M: MutableArray + 'static> MutableArray for MutableFixedSizeListArray<M> {
     fn as_arc(&mut self) -> Arc<dyn Array> {
         FixedSizeListArray::new(
             self.dtype.clone(),
-            self.length,
             self.values.as_box(),
             std::mem::take(&mut self.validity).map(|x| x.into()),
         )
@@ -203,9 +185,6 @@ impl<M: MutableArray + 'static> MutableArray for MutableFixedSizeListArray<M> {
         } else {
             self.init_validity()
         }
-        self.length += 1;
-
-        debug_assert!(self.has_valid_invariants());
     }
 
     fn reserve(&mut self, additional: usize) {
@@ -227,9 +206,6 @@ where
         for items in iter {
             self.try_push(items)?;
         }
-
-        debug_assert!(self.has_valid_invariants());
-
         Ok(())
     }
 }
@@ -247,9 +223,6 @@ where
         } else {
             self.push_null();
         }
-
-        debug_assert!(self.has_valid_invariants());
-
         Ok(())
     }
 }
@@ -270,8 +243,6 @@ where
         } else {
             self.push_null();
         }
-
-        debug_assert!(self.has_valid_invariants());
     }
 }
 
@@ -282,11 +253,6 @@ where
     fn try_extend_from_self(&mut self, other: &Self) -> PolarsResult<()> {
         extend_validity(self.len(), &mut self.validity, &other.validity);
 
-        self.values.try_extend_from_self(&other.values)?;
-        self.length += other.len();
-
-        debug_assert!(self.has_valid_invariants());
-
-        Ok(())
+        self.values.try_extend_from_self(&other.values)
     }
 }

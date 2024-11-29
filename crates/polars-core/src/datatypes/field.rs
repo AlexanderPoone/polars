@@ -165,7 +165,7 @@ impl DataType {
             ArrowDataType::Extension(name, _, _) if name.as_str() == "POLARS_EXTENSION_TYPE" => {
                 #[cfg(feature = "object")]
                 {
-                    DataType::Object("object", None)
+                    DataType::Object("extension", None)
                 }
                 #[cfg(not(feature = "object"))]
                 {

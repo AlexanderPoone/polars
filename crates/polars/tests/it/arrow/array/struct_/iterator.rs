@@ -14,7 +14,6 @@ fn test_simple_iter() {
 
     let array = StructArray::new(
         ArrowDataType::Struct(fields),
-        boolean.len(),
         vec![boolean.clone(), int.clone()],
         None,
     );

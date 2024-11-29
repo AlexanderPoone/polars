@@ -25,7 +25,7 @@ pub trait PolarsIterator:
     ExactSizeIterator + DoubleEndedIterator + Send + Sync + TrustedLen
 {
 }
-unsafe impl<I> TrustedLen for Box<dyn PolarsIterator<Item = I> + '_> {}
+unsafe impl<'a, I> TrustedLen for Box<dyn PolarsIterator<Item = I> + 'a> {}
 
 /// Implement [`PolarsIterator`] for every iterator that implements the needed traits.
 impl<T: ?Sized> PolarsIterator for T where
@@ -79,7 +79,7 @@ impl<'a> BoolIterNoNull<'a> {
     }
 }
 
-impl Iterator for BoolIterNoNull<'_> {
+impl<'a> Iterator for BoolIterNoNull<'a> {
     type Item = bool;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -100,7 +100,7 @@ impl Iterator for BoolIterNoNull<'_> {
     }
 }
 
-impl DoubleEndedIterator for BoolIterNoNull<'_> {
+impl<'a> DoubleEndedIterator for BoolIterNoNull<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.current_end == self.current {
             None
@@ -112,7 +112,7 @@ impl DoubleEndedIterator for BoolIterNoNull<'_> {
 }
 
 /// all arrays have known size.
-impl ExactSizeIterator for BoolIterNoNull<'_> {}
+impl<'a> ExactSizeIterator for BoolIterNoNull<'a> {}
 
 impl BooleanChunked {
     #[allow(clippy::wrong_self_convention)]
@@ -339,7 +339,7 @@ impl<'a> FixedSizeListIterNoNull<'a> {
 }
 
 #[cfg(feature = "dtype-array")]
-impl Iterator for FixedSizeListIterNoNull<'_> {
+impl<'a> Iterator for FixedSizeListIterNoNull<'a> {
     type Item = Series;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -367,7 +367,7 @@ impl Iterator for FixedSizeListIterNoNull<'_> {
 }
 
 #[cfg(feature = "dtype-array")]
-impl DoubleEndedIterator for FixedSizeListIterNoNull<'_> {
+impl<'a> DoubleEndedIterator for FixedSizeListIterNoNull<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.current_end == self.current {
             None
@@ -388,7 +388,7 @@ impl DoubleEndedIterator for FixedSizeListIterNoNull<'_> {
 
 /// all arrays have known size.
 #[cfg(feature = "dtype-array")]
-impl ExactSizeIterator for FixedSizeListIterNoNull<'_> {}
+impl<'a> ExactSizeIterator for FixedSizeListIterNoNull<'a> {}
 
 #[cfg(feature = "dtype-array")]
 impl ArrayChunked {

@@ -16,9 +16,9 @@ from polars.exceptions import (
     ComputeError,
     InvalidOperationError,
     OutOfBoundsError,
+    PanicException,
     SchemaError,
     SchemaFieldNotFoundError,
-    ShapeError,
     StructFieldNotFoundError,
 )
 from tests.unit.conftest import TEMPORAL_DTYPES
@@ -115,7 +115,7 @@ def test_string_numeric_comp_err() -> None:
 
 def test_panic_error() -> None:
     with pytest.raises(
-        InvalidOperationError,
+        PanicException,
         match="unit: 'k' not supported",
     ):
         pl.datetime_range(
@@ -293,7 +293,10 @@ def test_invalid_sort_by() -> None:
     )
 
     # `select a where b order by c desc`
-    with pytest.raises(ShapeError):
+    with pytest.raises(
+        ComputeError,
+        match=r"`sort_by` produced different length \(5\) than the Series that has to be sorted \(3\)",
+    ):
         df.select(pl.col("a").filter(pl.col("b") == "M").sort_by("c", descending=True))
 
 
@@ -444,7 +447,9 @@ def test_compare_different_len() -> None:
     )
 
     s = pl.Series([2, 5, 8])
-    with pytest.raises(ShapeError):
+    with pytest.raises(
+        ComputeError, match=r"cannot evaluate two Series of different lengths"
+    ):
         df.filter(pl.col("idx") == s)
 
 
@@ -695,34 +700,5 @@ def test_no_panic_pandas_nat() -> None:
 
 
 def test_list_to_struct_invalid_type() -> None:
-    with pytest.raises(pl.exceptions.InvalidOperationError):
+    with pytest.raises(pl.exceptions.SchemaError):
         pl.DataFrame({"a": 1}).select(pl.col("a").list.to_struct())
-
-
-def test_raise_invalid_agg() -> None:
-    with pytest.raises(pl.exceptions.ColumnNotFoundError):
-        (
-            pl.LazyFrame({"foo": [1]})
-            .with_row_index()
-            .group_by("index")
-            .agg(pl.col("foo").filter(pl.col("i_do_not_exist")))
-        ).collect()
-
-
-def test_err_mean_horizontal_lists() -> None:
-    df = pl.DataFrame(
-        {
-            "experiment_id": [1, 2],
-            "sensor1": [[1, 2, 3], [7, 8, 9]],
-            "sensor2": [[4, 5, 6], [10, 11, 12]],
-        }
-    )
-    with pytest.raises(pl.exceptions.InvalidOperationError):
-        df.with_columns(pl.mean_horizontal("sensor1", "sensor2").alias("avg_sensor"))
-
-
-def test_raise_column_not_found_in_join_arg() -> None:
-    a = pl.DataFrame({"x": [1, 2, 3]})
-    b = pl.DataFrame({"y": [1, 2, 3]})
-    with pytest.raises(pl.exceptions.ColumnNotFoundError):
-        a.join(b, on="y")

@@ -1,6 +1,6 @@
 use std::fmt;
 use std::fmt::Debug;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use polars_core::prelude::*;
 use recursive::recursive;
@@ -49,13 +49,19 @@ pub use schema::*;
 use serde::{Deserialize, Serialize};
 use strum_macros::IntoStaticStr;
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub enum Context {
     /// Any operation that is done on groups
     Aggregation,
     /// Any operation that is done while projection/ selection of data
-    #[default]
     Default,
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone)]
+pub struct DslScanSources {
+    pub sources: ScanSources,
+    pub is_expanded: bool,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -70,15 +76,15 @@ pub enum DslPlan {
     /// Cache the input at this point in the LP
     Cache { input: Arc<DslPlan>, id: usize },
     Scan {
-        sources: ScanSources,
-        /// Materialized at IR except for AnonymousScan.
-        file_info: Option<FileInfo>,
+        sources: Arc<Mutex<DslScanSources>>,
+        // Option as this is mostly materialized on the IR phase.
+        // During conversion we update the value in the DSL as well
+        // This is to cater to use cases where parts of a `LazyFrame`
+        // are used as base of different queries in a loop. That way
+        // the expensive schema resolving is cached.
+        file_info: Arc<RwLock<Option<FileInfo>>>,
         file_options: FileScanOptions,
         scan_type: FileScan,
-        /// Local use cases often repeatedly collect the same `LazyFrame` (e.g. in interactive notebook use-cases),
-        /// so we cache the IR conversion here, as the path expansion can be quite slow (especially for cloud paths).
-        #[cfg_attr(feature = "serde", serde(skip))]
-        cached_ir: Arc<Mutex<Option<IR>>>,
     },
     // we keep track of the projection and selection as it is cheaper to first project and then filter
     /// In memory DataFrame
@@ -182,7 +188,7 @@ impl Clone for DslPlan {
             Self::PythonScan { options } => Self::PythonScan { options: options.clone() },
             Self::Filter { input, predicate } => Self::Filter { input: input.clone(), predicate: predicate.clone() },
             Self::Cache { input, id } => Self::Cache { input: input.clone(), id: id.clone() },
-            Self::Scan { sources, file_info, file_options, scan_type, cached_ir } => Self::Scan { sources: sources.clone(), file_info: file_info.clone(), file_options: file_options.clone(), scan_type: scan_type.clone(), cached_ir: cached_ir.clone() },
+            Self::Scan { sources, file_info, file_options, scan_type } => Self::Scan { sources: sources.clone(), file_info: file_info.clone(), file_options: file_options.clone(), scan_type: scan_type.clone() },
             Self::DataFrameScan { df, schema, } => Self::DataFrameScan { df: df.clone(), schema: schema.clone(),  },
             Self::Select { expr, input, options } => Self::Select { expr: expr.clone(), input: input.clone(), options: options.clone() },
             Self::GroupBy { input, keys, aggs,  apply, maintain_order, options } => Self::GroupBy { input: input.clone(), keys: keys.clone(), aggs: aggs.clone(), apply: apply.clone(), maintain_order: maintain_order.clone(), options: options.clone() },

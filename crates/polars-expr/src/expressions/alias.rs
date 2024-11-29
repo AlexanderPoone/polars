@@ -18,7 +18,7 @@ impl AliasExpr {
         }
     }
 
-    fn finish(&self, input: Column) -> Column {
+    fn finish(&self, input: Series) -> Series {
         input.with_name(self.name.clone())
     }
 }
@@ -28,16 +28,9 @@ impl PhysicalExpr for AliasExpr {
         Some(&self.expr)
     }
 
-    fn evaluate(&self, df: &DataFrame, state: &ExecutionState) -> PolarsResult<Column> {
+    fn evaluate(&self, df: &DataFrame, state: &ExecutionState) -> PolarsResult<Series> {
         let series = self.physical_expr.evaluate(df, state)?;
         Ok(self.finish(series))
-    }
-
-    fn evaluate_inline_impl(&self, depth_limit: u8) -> Option<Column> {
-        let depth_limit = depth_limit.checked_sub(1)?;
-        self.physical_expr
-            .evaluate_inline_impl(depth_limit)
-            .map(|s| self.finish(s))
     }
 
     #[allow(clippy::ptr_arg)]
@@ -48,13 +41,13 @@ impl PhysicalExpr for AliasExpr {
         state: &ExecutionState,
     ) -> PolarsResult<AggregationContext<'a>> {
         let mut ac = self.physical_expr.evaluate_on_groups(df, groups, state)?;
-        let c = ac.take();
-        let c = self.finish(c);
+        let s = ac.take();
+        let s = self.finish(s);
 
         if ac.is_literal() {
-            ac.with_literal(c);
+            ac.with_literal(s);
         } else {
-            ac.with_values(c, ac.is_aggregated(), Some(&self.expr))?;
+            ac.with_series(s, ac.is_aggregated(), Some(&self.expr))?;
         }
         Ok(ac)
     }
@@ -64,10 +57,6 @@ impl PhysicalExpr for AliasExpr {
             self.name.clone(),
             self.physical_expr.to_field(input_schema)?.dtype().clone(),
         ))
-    }
-
-    fn is_literal(&self) -> bool {
-        self.physical_expr.is_literal()
     }
 
     fn is_scalar(&self) -> bool {
@@ -85,7 +74,7 @@ impl PartitionedAggregation for AliasExpr {
         df: &DataFrame,
         groups: &GroupsProxy,
         state: &ExecutionState,
-    ) -> PolarsResult<Column> {
+    ) -> PolarsResult<Series> {
         let agg = self.physical_expr.as_partitioned_aggregator().unwrap();
         let s = agg.evaluate_partitioned(df, groups, state)?;
         Ok(s.with_name(self.name.clone()))
@@ -93,10 +82,10 @@ impl PartitionedAggregation for AliasExpr {
 
     fn finalize(
         &self,
-        partitioned: Column,
+        partitioned: Series,
         groups: &GroupsProxy,
         state: &ExecutionState,
-    ) -> PolarsResult<Column> {
+    ) -> PolarsResult<Series> {
         let agg = self.physical_expr.as_partitioned_aggregator().unwrap();
         let s = agg.finalize(partitioned, groups, state)?;
         Ok(s.with_name(self.name.clone()))

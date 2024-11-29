@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
 
 use polars_core::prelude::*;
 #[cfg(any(feature = "parquet", feature = "ipc", feature = "csv"))]
@@ -54,12 +54,14 @@ impl DslBuilder {
             },
             glob: false,
             include_file_paths: None,
-            allow_missing_columns: false,
         };
 
         Ok(DslPlan::Scan {
-            sources: ScanSources::Buffers(Arc::default()),
-            file_info: Some(file_info),
+            sources: Arc::new(Mutex::new(DslScanSources {
+                sources: ScanSources::Buffers(Arc::default()),
+                is_expanded: true,
+            })),
+            file_info: Arc::new(RwLock::new(Some(file_info))),
             file_options,
             scan_type: FileScan::Anonymous {
                 function,
@@ -68,7 +70,6 @@ impl DslBuilder {
                     skip_rows,
                 }),
             },
-            cached_ir: Default::default(),
         }
         .into())
     }
@@ -76,7 +77,7 @@ impl DslBuilder {
     #[cfg(feature = "parquet")]
     #[allow(clippy::too_many_arguments)]
     pub fn scan_parquet(
-        sources: ScanSources,
+        sources: DslScanSources,
         n_rows: Option<usize>,
         cache: bool,
         parallel: polars_io::parquet::read::ParallelStrategy,
@@ -85,11 +86,9 @@ impl DslBuilder {
         low_memory: bool,
         cloud_options: Option<CloudOptions>,
         use_statistics: bool,
-        schema: Option<SchemaRef>,
         hive_options: HiveOptions,
         glob: bool,
         include_file_paths: Option<PlSmallStr>,
-        allow_missing_columns: bool,
     ) -> PolarsResult<Self> {
         let options = FileScanOptions {
             with_columns: None,
@@ -101,15 +100,13 @@ impl DslBuilder {
             hive_options,
             glob,
             include_file_paths,
-            allow_missing_columns,
         };
         Ok(DslPlan::Scan {
-            sources,
-            file_info: None,
+            sources: Arc::new(Mutex::new(sources)),
+            file_info: Arc::new(RwLock::new(None)),
             file_options: options,
             scan_type: FileScan::Parquet {
                 options: ParquetOptions {
-                    schema,
                     parallel,
                     low_memory,
                     use_statistics,
@@ -117,7 +114,6 @@ impl DslBuilder {
                 cloud_options,
                 metadata: None,
             },
-            cached_ir: Default::default(),
         }
         .into())
     }
@@ -125,7 +121,7 @@ impl DslBuilder {
     #[cfg(feature = "ipc")]
     #[allow(clippy::too_many_arguments)]
     pub fn scan_ipc(
-        sources: ScanSources,
+        sources: DslScanSources,
         options: IpcScanOptions,
         n_rows: Option<usize>,
         cache: bool,
@@ -136,8 +132,8 @@ impl DslBuilder {
         include_file_paths: Option<PlSmallStr>,
     ) -> PolarsResult<Self> {
         Ok(DslPlan::Scan {
-            sources,
-            file_info: None,
+            sources: Arc::new(Mutex::new(sources)),
+            file_info: Arc::new(RwLock::new(None)),
             file_options: FileScanOptions {
                 with_columns: None,
                 cache,
@@ -148,14 +144,12 @@ impl DslBuilder {
                 hive_options,
                 glob: true,
                 include_file_paths,
-                allow_missing_columns: false,
             },
             scan_type: FileScan::Ipc {
                 options,
                 cloud_options,
                 metadata: None,
             },
-            cached_ir: Default::default(),
         }
         .into())
     }
@@ -163,7 +157,7 @@ impl DslBuilder {
     #[allow(clippy::too_many_arguments)]
     #[cfg(feature = "csv")]
     pub fn scan_csv(
-        sources: ScanSources,
+        sources: DslScanSources,
         read_options: CsvReadOptions,
         cache: bool,
         cloud_options: Option<CloudOptions>,
@@ -187,17 +181,15 @@ impl DslBuilder {
             },
             glob,
             include_file_paths,
-            allow_missing_columns: false,
         };
         Ok(DslPlan::Scan {
-            sources,
-            file_info: None,
+            sources: Arc::new(Mutex::new(sources)),
+            file_info: Arc::new(RwLock::new(None)),
             file_options: options,
             scan_type: FileScan::Csv {
                 options: read_options,
                 cloud_options,
             },
-            cached_ir: Default::default(),
         }
         .into())
     }
@@ -229,26 +221,6 @@ impl DslBuilder {
                 ..Default::default()
             },
         )
-    }
-
-    pub fn drop_nans(self, subset: Option<Vec<Expr>>) -> Self {
-        if let Some(subset) = subset {
-            self.filter(
-                all_horizontal(
-                    subset
-                        .into_iter()
-                        .map(|v| v.is_not_nan())
-                        .collect::<Vec<_>>(),
-                )
-                .unwrap(),
-            )
-        } else {
-            self.filter(
-                // TODO: when Decimal supports NaN, include here
-                all_horizontal([dtype_cols([DataType::Float32, DataType::Float64]).is_not_nan()])
-                    .unwrap(),
-            )
-        }
     }
 
     pub fn drop_nulls(self, subset: Option<Vec<Expr>>) -> Self {

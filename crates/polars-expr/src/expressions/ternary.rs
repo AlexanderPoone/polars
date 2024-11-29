@@ -56,13 +56,13 @@ fn finish_as_iters<'a>(
             .transpose()
         })
         .collect::<PolarsResult<ListChunked>>()?
-        .with_name(ac_truthy.get_values().name().clone());
+        .with_name(ac_truthy.series().name().clone());
 
     // Aggregation leaves only a single chunk.
     let arr = ca.downcast_iter().next().unwrap();
     let list_vals_len = arr.values().len();
 
-    let mut out = ca.into_column();
+    let mut out = ca.into_series();
     if ac_truthy.arity_should_explode() && ac_falsy.arity_should_explode() && ac_mask.arity_should_explode() &&
         // Exploded list should be equal to groups length.
         list_vals_len == ac_truthy.groups.len()
@@ -70,7 +70,7 @@ fn finish_as_iters<'a>(
         out = out.explode()?
     }
 
-    ac_truthy.with_values(out, true, None)?;
+    ac_truthy.with_series(out, true, None)?;
     Ok(ac_truthy)
 }
 
@@ -79,7 +79,7 @@ impl PhysicalExpr for TernaryExpr {
         Some(&self.expr)
     }
 
-    fn evaluate(&self, df: &DataFrame, state: &ExecutionState) -> PolarsResult<Column> {
+    fn evaluate(&self, df: &DataFrame, state: &ExecutionState) -> PolarsResult<Series> {
         let mut state = state.split();
         // Don't cache window functions as they run in parallel.
         state.remove_cache_window_flag();
@@ -168,8 +168,8 @@ impl PhysicalExpr for TernaryExpr {
             }
 
             let out = ac_truthy
-                .get_values()
-                .zip_with(ac_mask.get_values().bool()?, ac_falsy.get_values())?;
+                .series()
+                .zip_with(ac_mask.series().bool()?, ac_falsy.series())?;
 
             for ac in [&ac_mask, &ac_truthy, &ac_falsy].into_iter() {
                 if matches!(ac.agg_state(), NotAggregated(_)) {
@@ -230,7 +230,7 @@ impl PhysicalExpr for TernaryExpr {
         //   * `zip_with` can be called directly with the series
         // * mix of unit literals and AggregatedList
         //   * `zip_with` can be called with the flat values after the offsets
-        //     have been checked for alignment
+        //     have been been checked for alignment
         let ac_target = non_literal_acs.first().unwrap();
 
         let agg_state_out = match ac_target.agg_state() {
@@ -257,21 +257,21 @@ impl PhysicalExpr for TernaryExpr {
                 }
 
                 let truthy = if let AggregatedList(s) = ac_truthy.agg_state() {
-                    s.list().unwrap().get_inner().into_column()
+                    s.list().unwrap().get_inner()
                 } else {
-                    ac_truthy.get_values().clone()
+                    ac_truthy.series().clone()
                 };
 
                 let falsy = if let AggregatedList(s) = ac_falsy.agg_state() {
-                    s.list().unwrap().get_inner().into_column()
+                    s.list().unwrap().get_inner()
                 } else {
-                    ac_falsy.get_values().clone()
+                    ac_falsy.series().clone()
                 };
 
                 let mask = if let AggregatedList(s) = ac_mask.agg_state() {
-                    s.list().unwrap().get_inner().into_column()
+                    s.list().unwrap().get_inner()
                 } else {
-                    ac_mask.get_values().clone()
+                    ac_mask.series().clone()
                 };
 
                 let out = truthy.zip_with(mask.bool()?, &falsy)?;
@@ -280,10 +280,8 @@ impl PhysicalExpr for TernaryExpr {
                 // offsets buffer of the result, so we construct the result
                 // ListChunked directly from the 2.
                 let out = out.rechunk();
-                // @scalar-opt
-                // @partition-opt
-                let values = out.as_materialized_series().array_ref(0);
-                let offsets = ac_target.get_values().list().unwrap().offsets()?;
+                let values = out.array_ref(0);
+                let offsets = ac_target.series().list().unwrap().offsets()?;
                 let inner_type = out.dtype();
                 let dtype = LargeListArray::default_datatype(values.dtype().clone());
 
@@ -293,11 +291,11 @@ impl PhysicalExpr for TernaryExpr {
                 let mut out = ListChunked::with_chunk(truthy.name().clone(), out);
                 unsafe { out.to_logical(inner_type.clone()) };
 
-                if ac_target.get_values().list().unwrap()._can_fast_explode() {
+                if ac_target.series().list().unwrap()._can_fast_explode() {
                     out.set_fast_explode();
                 };
 
-                let out = out.into_column();
+                let out = out.into_series();
 
                 AggregatedList(out)
             },
@@ -307,8 +305,8 @@ impl PhysicalExpr for TernaryExpr {
                 }
 
                 let out = ac_truthy
-                    .get_values()
-                    .zip_with(ac_mask.get_values().bool()?, ac_falsy.get_values())?;
+                    .series()
+                    .zip_with(ac_mask.series().bool()?, ac_falsy.series())?;
                 AggregatedScalar(out)
             },
             _ => {
@@ -339,7 +337,7 @@ impl PartitionedAggregation for TernaryExpr {
         df: &DataFrame,
         groups: &GroupsProxy,
         state: &ExecutionState,
-    ) -> PolarsResult<Column> {
+    ) -> PolarsResult<Series> {
         let truthy = self.truthy.as_partitioned_aggregator().unwrap();
         let falsy = self.falsy.as_partitioned_aggregator().unwrap();
         let mask = self.predicate.as_partitioned_aggregator().unwrap();
@@ -354,10 +352,10 @@ impl PartitionedAggregation for TernaryExpr {
 
     fn finalize(
         &self,
-        partitioned: Column,
+        partitioned: Series,
         _groups: &GroupsProxy,
         _state: &ExecutionState,
-    ) -> PolarsResult<Column> {
+    ) -> PolarsResult<Series> {
         Ok(partitioned)
     }
 }

@@ -58,7 +58,7 @@ fn includes_null_predicate_3038() -> PolarsResult<()> {
                     s.str()?
                         .to_lowercase()
                         .contains("not_exist", true)
-                        .map(|ca| Some(ca.into_column()))
+                        .map(|ca| Some(ca.into_series()))
                 },
                 GetOutput::from_type(DataType::Boolean),
             ))
@@ -88,7 +88,7 @@ fn includes_null_predicate_3038() -> PolarsResult<()> {
                     s.str()?
                         .to_lowercase()
                         .contains_literal("non-existent")
-                        .map(|ca| Some(ca.into_column()))
+                        .map(|ca| Some(ca.into_series()))
                 },
                 GetOutput::from_type(DataType::Boolean),
             ))

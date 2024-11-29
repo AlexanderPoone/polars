@@ -4,7 +4,7 @@ from collections import OrderedDict, namedtuple
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from random import shuffle
-from typing import TYPE_CHECKING, Any, Literal, NamedTuple
+from typing import TYPE_CHECKING, Any, List, Literal, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -22,6 +22,7 @@ from polars.testing import assert_frame_equal, assert_series_equal
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
     from zoneinfo import ZoneInfo
 
     from polars._typing import PolarsDataType
@@ -150,7 +151,7 @@ def test_init_dict() -> None:
             data={"dt": dates, "dtm": datetimes},
             schema=coldefs,
         )
-        assert df.schema == {"dt": pl.Date, "dtm": pl.Datetime("us")}
+        assert df.schema == {"dt": pl.Date, "dtm": pl.Datetime}
         assert df.rows() == list(zip(py_dates, py_datetimes))
 
     # Overriding dict column names/types
@@ -251,7 +252,7 @@ def test_init_structured_objects() -> None:
         )
         assert df.schema == {
             "ts": pl.Datetime("ms"),
-            "tk": pl.Categorical(ordering="physical"),
+            "tk": pl.Categorical,
             "pc": pl.Decimal(scale=1),
             "sz": pl.UInt16,
         }
@@ -264,8 +265,8 @@ def test_init_structured_objects() -> None:
 def test_init_pydantic_2x() -> None:
     class PageView(BaseModel):
         user_id: str
-        ts: datetime = Field(alias=["ts", "$date"])  # type: ignore[literal-required, call-overload]
-        path: str = Field("?", alias=["url", "path"])  # type: ignore[literal-required, call-overload]
+        ts: datetime = Field(alias=["ts", "$date"])  # type: ignore[literal-required, arg-type]
+        path: str = Field("?", alias=["url", "path"])  # type: ignore[literal-required, arg-type]
         referer: str = Field("?", alias="referer")
         event: Literal["leave", "enter"] = Field("enter")
         time_on_page: int = Field(0, serialization_alias="top")
@@ -280,10 +281,11 @@ def test_init_pydantic_2x() -> None:
         "top": 123
     }]
     """
-    adapter: TypeAdapter[Any] = TypeAdapter(list[PageView])
+    adapter: TypeAdapter[Any] = TypeAdapter(List[PageView])
     models = adapter.validate_json(data_json)
 
     result = pl.DataFrame(models)
+
     expected = pl.DataFrame(
         {
             "user_id": ["x"],
@@ -456,15 +458,9 @@ def test_dataclasses_initvar_typing() -> None:
     assert dataclasses.asdict(abc) == df.rows(named=True)[0]
 
 
-@pytest.mark.parametrize(
-    "nt",
-    [
-        namedtuple("TestData", ["id", "info"]),  # noqa: PYI024
-        NamedTuple("TestData", [("id", int), ("info", str)]),
-    ],
-)
-def test_collections_namedtuple(nt: type) -> None:
-    nt_data = [nt(1, "a"), nt(2, "b"), nt(3, "c")]
+def test_collections_namedtuple() -> None:
+    TestData = namedtuple("TestData", ["id", "info"])
+    nt_data = [TestData(1, "a"), TestData(2, "b"), TestData(3, "c")]
 
     result = pl.DataFrame(nt_data)
     expected = pl.DataFrame({"id": [1, 2, 3], "info": ["a", "b", "c"]})

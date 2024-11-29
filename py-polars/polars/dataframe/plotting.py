@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import inspect
-from typing import TYPE_CHECKING, Callable, Union
-
-from polars.dependencies import altair as alt
+from typing import TYPE_CHECKING, Callable, Dict, Union
 
 if TYPE_CHECKING:
     import sys
 
+    import altair as alt
     from altair.typing import ChannelColor as Color
     from altair.typing import ChannelOrder as Order
     from altair.typing import ChannelSize as Size
@@ -27,14 +25,23 @@ if TYPE_CHECKING:
     else:
         from typing_extensions import Unpack
 
-    Encoding: TypeAlias = Union[X, Y, Color, Order, Size, Tooltip]
-    Encodings: TypeAlias = dict[str, Encoding]
+    Encodings: TypeAlias = Dict[
+        str,
+        Union[X, Y, Color, Order, Size, Tooltip],
+    ]
+
+
+def _add_tooltip(encodings: Encodings, /, **kwargs: Unpack[EncodeKwds]) -> None:
+    if "tooltip" not in kwargs:
+        encodings["tooltip"] = [*encodings.values(), *kwargs.values()]  # type: ignore[assignment]
 
 
 class DataFramePlot:
     """DataFrame.plot namespace."""
 
     def __init__(self, df: DataFrame) -> None:
+        import altair as alt
+
         self._chart = alt.Chart(df)
 
     def bar(
@@ -93,11 +100,8 @@ class DataFramePlot:
             encodings["y"] = y
         if color is not None:
             encodings["color"] = color
-        return (
-            self._chart.mark_bar(tooltip=True)
-            .encode(**encodings, **kwargs)
-            .interactive()
-        )
+        _add_tooltip(encodings, **kwargs)
+        return self._chart.mark_bar().encode(**encodings, **kwargs).interactive()
 
     def line(
         self,
@@ -158,11 +162,8 @@ class DataFramePlot:
             encodings["color"] = color
         if order is not None:
             encodings["order"] = order
-        return (
-            self._chart.mark_line(tooltip=True)
-            .encode(**encodings, **kwargs)
-            .interactive()
-        )
+        _add_tooltip(encodings, **kwargs)
+        return self._chart.mark_line().encode(**encodings, **kwargs).interactive()
 
     def point(
         self,
@@ -223,8 +224,9 @@ class DataFramePlot:
             encodings["color"] = color
         if size is not None:
             encodings["size"] = size
+        _add_tooltip(encodings, **kwargs)
         return (
-            self._chart.mark_point(tooltip=True)
+            self._chart.mark_point()
             .encode(
                 **encodings,
                 **kwargs,
@@ -240,17 +242,10 @@ class DataFramePlot:
         if method is None:
             msg = "Altair has no method 'mark_{attr}'"
             raise AttributeError(msg)
+        encodings: Encodings = {}
 
-        accepts_tooltip_argument = "tooltip" in {
-            value.name for value in inspect.signature(method).parameters.values()
-        }
-        if accepts_tooltip_argument:
-
-            def func(**kwargs: EncodeKwds) -> alt.Chart:
-                return method(tooltip=True).encode(**kwargs).interactive()
-        else:
-
-            def func(**kwargs: EncodeKwds) -> alt.Chart:
-                return method().encode(**kwargs).interactive()
+        def func(**kwargs: EncodeKwds) -> alt.Chart:
+            _add_tooltip(encodings, **kwargs)
+            return method().encode(**encodings, **kwargs).interactive()
 
         return func

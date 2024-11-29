@@ -63,7 +63,7 @@ pub(super) fn process_hstack(
         acc_projections,
         &lp_arena.get(input).schema(lp_arena),
         expr_arena,
-        true, // expands_schema
+        false,
     );
 
     proj_pd.pushdown_and_assign(

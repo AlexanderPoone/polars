@@ -11,6 +11,7 @@ from polars.testing import assert_frame_equal
 
 if TYPE_CHECKING:
     from datetime import timezone
+
     from zoneinfo import ZoneInfo
 
     from polars._typing import FillNullStrategy, PolarsIntegerType

@@ -8,7 +8,6 @@ mod misc;
 mod random;
 mod range;
 mod string_cache;
-mod strings;
 mod whenthen;
 
 pub use aggregation::*;
@@ -21,5 +20,4 @@ pub use misc::*;
 pub use random::*;
 pub use range::*;
 pub use string_cache::*;
-pub use strings::*;
 pub use whenthen::*;

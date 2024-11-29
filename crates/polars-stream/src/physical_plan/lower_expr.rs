@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use polars_core::frame::DataFrame;
-use polars_core::prelude::{Column, Field, InitHashMaps, PlHashMap, PlHashSet};
+use polars_core::prelude::{Field, InitHashMaps, PlHashMap, PlHashSet};
 use polars_core::schema::{Schema, SchemaExt};
 use polars_error::PolarsResult;
 use polars_expr::planner::get_expr_depth_limit;
@@ -87,24 +87,13 @@ pub(crate) fn is_elementwise(
             function: _,
             output_type: _,
             options,
-        } => {
-            options.is_elementwise() && input.iter().all(|e| is_elementwise(e.node(), arena, cache))
-        },
-        AExpr::Function {
+        }
+        | AExpr::Function {
             input,
-            function,
+            function: _,
             options,
         } => {
-            match function {
-                // Non-strict strptime must be done in-memory to ensure the format
-                // is consistent across the entire dataframe.
-                #[cfg(feature = "strings")]
-                FunctionExpr::StringExpr(StringFunction::Strptime(_, opts)) => opts.strict,
-                _ => {
-                    options.is_elementwise()
-                        && input.iter().all(|e| is_elementwise(e.node(), arena, cache))
-                },
-            }
+            options.is_elementwise() && input.iter().all(|e| is_elementwise(e.node(), arena, cache))
         },
 
         AExpr::Window { .. } => false,
@@ -239,12 +228,24 @@ fn build_input_independent_node_with_ctx(
     exprs: &[ExprIR],
     ctx: &mut LowerExprContext,
 ) -> PolarsResult<PhysNodeKey> {
-    let output_schema = compute_output_schema(&Schema::default(), exprs, ctx.expr_arena)?;
+    let expr_depth_limit = get_expr_depth_limit()?;
+    let mut state = ExpressionConversionState::new(false, expr_depth_limit);
+    let empty = DataFrame::empty();
+    let execution_state = ExecutionState::new();
+    let columns = exprs
+        .iter()
+        .map(|expr| {
+            let phys_expr =
+                create_physical_expr(expr, Context::Default, ctx.expr_arena, None, &mut state)?;
+
+            phys_expr.evaluate(&empty, &execution_state)
+        })
+        .try_collect_vec()?;
+
+    let df = Arc::new(DataFrame::new_with_broadcast(columns)?);
     Ok(ctx.phys_sm.insert(PhysNode::new(
-        output_schema,
-        PhysNodeKind::InputIndependentSelect {
-            selectors: exprs.to_vec(),
-        },
+        Arc::new(df.schema()),
+        PhysNodeKind::InMemorySource { df },
     )))
 }
 
@@ -310,17 +311,10 @@ fn build_fallback_node_with_ctx(
 ) -> PolarsResult<PhysNodeKey> {
     // Pre-select only the columns that are needed for this fallback expression.
     let input_schema = &ctx.phys_sm[input].output_schema;
-    let mut select_names: PlHashSet<_> = exprs
+    let select_names: PlHashSet<_> = exprs
         .iter()
         .flat_map(|expr| polars_plan::utils::aexpr_to_leaf_names_iter(expr.node(), ctx.expr_arena))
         .collect();
-    // To keep the length correct we have to ensure we select at least one
-    // column.
-    if select_names.is_empty() {
-        if let Some(name) = input_schema.iter_names().next() {
-            select_names.insert(name.clone());
-        }
-    }
     let input_node = if input_schema
         .iter_names()
         .any(|name| !select_names.contains(name.as_str()))
@@ -349,7 +343,7 @@ fn build_fallback_node_with_ctx(
                 expr,
                 Context::Default,
                 ctx.expr_arena,
-                &ctx.phys_sm[input_node].output_schema,
+                None,
                 &mut conv_state,
             )
         })
@@ -358,7 +352,7 @@ fn build_fallback_node_with_ctx(
         let exec_state = ExecutionState::new();
         let columns = phys_exprs
             .iter()
-            .map(|phys_expr| phys_expr.evaluate(&df, &exec_state).map(Column::from))
+            .map(|phys_expr| phys_expr.evaluate(&df, &exec_state))
             .try_collect()?;
         DataFrame::new_with_broadcast(columns)
     };
@@ -574,9 +568,7 @@ fn lower_exprs_with_ctx(
                     ..
                 }
                 | IRAggExpr::Sum(ref mut inner)
-                | IRAggExpr::Mean(ref mut inner)
-                | IRAggExpr::Var(ref mut inner, _ /* ddof */)
-                | IRAggExpr::Std(ref mut inner, _ /* ddof */) => {
+                | IRAggExpr::Mean(ref mut inner) => {
                     let (trans_input, trans_exprs) = lower_exprs_with_ctx(input, &[*inner], ctx)?;
                     *inner = trans_exprs[0];
 
@@ -599,13 +591,9 @@ fn lower_exprs_with_ctx(
                 | IRAggExpr::Implode(_)
                 | IRAggExpr::Quantile { .. }
                 | IRAggExpr::Count(_, _)
+                | IRAggExpr::Std(_, _)
+                | IRAggExpr::Var(_, _)
                 | IRAggExpr::AggGroups(_) => {
-                    let out_name = unique_column_name();
-                    fallback_subset.push(ExprIR::new(expr, OutputName::Alias(out_name.clone())));
-                    transformed_exprs.push(ctx.expr_arena.add(AExpr::Column(out_name)));
-                },
-                #[cfg(feature = "bitwise")]
-                IRAggExpr::Bitwise(_, _) => {
                     let out_name = unique_column_name();
                     fallback_subset.push(ExprIR::new(expr, OutputName::Alias(out_name.clone())));
                     transformed_exprs.push(ctx.expr_arena.add(AExpr::Column(out_name)));
@@ -663,27 +651,6 @@ fn lower_exprs_with_ctx(
     Ok((zip_node, transformed_exprs))
 }
 
-/// Computes the schema that selecting the given expressions on the input schema
-/// would result in.
-pub fn compute_output_schema(
-    input_schema: &Schema,
-    exprs: &[ExprIR],
-    expr_arena: &Arena<AExpr>,
-) -> PolarsResult<Arc<Schema>> {
-    let output_schema: Schema = exprs
-        .iter()
-        .map(|e| {
-            let name = e.output_name().clone();
-            let dtype =
-                expr_arena
-                    .get(e.node())
-                    .to_dtype(input_schema, Context::Default, expr_arena)?;
-            PolarsResult::Ok(Field::new(name, dtype))
-        })
-        .try_collect()?;
-    Ok(Arc::new(output_schema))
-}
-
 /// Computes the schema that selecting the given expressions on the input node
 /// would result in.
 fn schema_for_select(
@@ -692,7 +659,19 @@ fn schema_for_select(
     ctx: &mut LowerExprContext,
 ) -> PolarsResult<Arc<Schema>> {
     let input_schema = &ctx.phys_sm[input].output_schema;
-    compute_output_schema(input_schema, exprs, ctx.expr_arena)
+    let output_schema: Schema = exprs
+        .iter()
+        .map(|e| {
+            let name = e.output_name().clone();
+            let dtype = ctx.expr_arena.get(e.node()).to_dtype(
+                input_schema,
+                Context::Default,
+                ctx.expr_arena,
+            )?;
+            PolarsResult::Ok(Field::new(name, dtype))
+        })
+        .try_collect()?;
+    Ok(Arc::new(output_schema))
 }
 
 fn build_select_node_with_ctx(

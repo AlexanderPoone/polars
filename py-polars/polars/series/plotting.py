@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import inspect
 from typing import TYPE_CHECKING, Callable
 
+from polars.dataframe.plotting import _add_tooltip
 from polars.dependencies import altair as alt
 
 if TYPE_CHECKING:
@@ -42,7 +42,7 @@ class SeriesPlot:
         `Altair <https://altair-viz.github.io/>`_.
 
         `s.plot.hist(**kwargs)` is shorthand for
-        `alt.Chart(s.to_frame()).mark_bar(tooltip=True).encode(x=alt.X(f'{s.name}:Q', bin=True), y='count()', **kwargs).interactive()`,
+        `alt.Chart(s.to_frame()).mark_bar().encode(x=alt.X(f'{s.name}:Q', bin=True), y='count()', **kwargs).interactive()`,
         and is provided for convenience - for full customisatibility, use a plotting
         library directly.
 
@@ -69,11 +69,9 @@ class SeriesPlot:
             "x": alt.X(f"{self._series_name}:Q", bin=True),
             "y": "count()",
         }
+        _add_tooltip(encodings, **kwargs)
         return (
-            alt.Chart(self._df)
-            .mark_bar(tooltip=True)
-            .encode(**encodings, **kwargs)
-            .interactive()
+            alt.Chart(self._df).mark_bar().encode(**encodings, **kwargs).interactive()
         )
 
     def kde(
@@ -88,7 +86,7 @@ class SeriesPlot:
         `Altair <https://altair-viz.github.io/>`_.
 
         `s.plot.kde(**kwargs)` is shorthand for
-        `alt.Chart(s.to_frame()).transform_density(s.name, as_=[s.name, 'density']).mark_area(tooltip=True).encode(x=s.name, y='density:Q', **kwargs).interactive()`,
+        `alt.Chart(s.to_frame()).transform_density(s.name, as_=[s.name, 'density']).mark_area().encode(x=s.name, y='density:Q', **kwargs).interactive()`,
         and is provided for convenience - for full customisatibility, use a plotting
         library directly.
 
@@ -112,10 +110,11 @@ class SeriesPlot:
             msg = "Cannot use `plot.kde` when Series name is `'density'`"
             raise ValueError(msg)
         encodings: Encodings = {"x": self._series_name, "y": "density:Q"}
+        _add_tooltip(encodings, **kwargs)
         return (
             alt.Chart(self._df)
             .transform_density(self._series_name, as_=[self._series_name, "density"])
-            .mark_area(tooltip=True)
+            .mark_area()
             .encode(**encodings, **kwargs)
             .interactive()
         )
@@ -132,7 +131,7 @@ class SeriesPlot:
         `Altair <https://altair-viz.github.io/>`_.
 
         `s.plot.line(**kwargs)` is shorthand for
-        `alt.Chart(s.to_frame().with_row_index()).mark_line(tooltip=True).encode(x='index', y=s.name, **kwargs).interactive()`,
+        `alt.Chart(s.to_frame().with_row_index()).mark_line().encode(x='index', y=s.name, **kwargs).interactive()`,
         and is provided for convenience - for full customisatibility, use a plotting
         library directly.
 
@@ -156,9 +155,10 @@ class SeriesPlot:
             msg = "Cannot call `plot.line` when Series name is 'index'"
             raise ValueError(msg)
         encodings: Encodings = {"x": "index", "y": self._series_name}
+        _add_tooltip(encodings, **kwargs)
         return (
             alt.Chart(self._df.with_row_index())
-            .mark_line(tooltip=True)
+            .mark_line()
             .encode(**encodings, **kwargs)
             .interactive()
         )
@@ -176,16 +176,8 @@ class SeriesPlot:
             raise AttributeError(msg)
         encodings: Encodings = {"x": "index", "y": self._series_name}
 
-        accepts_tooltip_argument = "tooltip" in {
-            value.name for value in inspect.signature(method).parameters.values()
-        }
-        if accepts_tooltip_argument:
-
-            def func(**kwargs: EncodeKwds) -> alt.Chart:
-                return method(tooltip=True).encode(**encodings, **kwargs).interactive()
-        else:
-
-            def func(**kwargs: EncodeKwds) -> alt.Chart:
-                return method().encode(**encodings, **kwargs).interactive()
+        def func(**kwargs: EncodeKwds) -> alt.Chart:
+            _add_tooltip(encodings, **kwargs)
+            return method().encode(**encodings, **kwargs).interactive()
 
         return func

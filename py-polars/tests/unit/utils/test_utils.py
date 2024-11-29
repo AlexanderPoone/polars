@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
 import pytest
@@ -25,7 +25,6 @@ from polars._utils.various import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
     from zoneinfo import ZoneInfo
 
     from polars._typing import TimeUnit

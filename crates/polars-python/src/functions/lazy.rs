@@ -75,7 +75,6 @@ pub fn arg_sort_by(
             nulls_last,
             multithreaded,
             maintain_order,
-            limit: None,
         },
     )
     .into()
@@ -201,13 +200,6 @@ pub fn concat_list(s: Vec<PyExpr>) -> PyResult<PyExpr> {
 }
 
 #[pyfunction]
-pub fn concat_arr(s: Vec<PyExpr>) -> PyResult<PyExpr> {
-    let s = s.into_iter().map(|e| e.inner).collect::<Vec<_>>();
-    let expr = dsl::concat_arr(s).map_err(PyPolarsErr::from)?;
-    Ok(expr.into())
-}
-
-#[pyfunction]
 pub fn concat_str(s: Vec<PyExpr>, separator: &str, ignore_nulls: bool) -> PyExpr {
     let s = s.into_iter().map(|e| e.inner).collect::<Vec<_>>();
     dsl::concat_str(s, separator, ignore_nulls).into()
@@ -233,14 +225,7 @@ pub fn arctan2(y: PyExpr, x: PyExpr) -> PyExpr {
 pub fn cum_fold(acc: PyExpr, lambda: PyObject, exprs: Vec<PyExpr>, include_init: bool) -> PyExpr {
     let exprs = exprs.to_exprs();
 
-    let func = move |a: Column, b: Column| {
-        binary_lambda(
-            &lambda,
-            a.take_materialized_series(),
-            b.take_materialized_series(),
-        )
-        .map(|v| v.map(Column::from))
-    };
+    let func = move |a: Series, b: Series| binary_lambda(&lambda, a, b);
     dsl::cum_fold_exprs(acc.inner, func, exprs, include_init).into()
 }
 
@@ -248,19 +233,12 @@ pub fn cum_fold(acc: PyExpr, lambda: PyObject, exprs: Vec<PyExpr>, include_init:
 pub fn cum_reduce(lambda: PyObject, exprs: Vec<PyExpr>) -> PyExpr {
     let exprs = exprs.to_exprs();
 
-    let func = move |a: Column, b: Column| {
-        binary_lambda(
-            &lambda,
-            a.take_materialized_series(),
-            b.take_materialized_series(),
-        )
-        .map(|v| v.map(Column::from))
-    };
+    let func = move |a: Series, b: Series| binary_lambda(&lambda, a, b);
     dsl::cum_reduce_exprs(func, exprs).into()
 }
 
 #[pyfunction]
-#[pyo3(signature = (year, month, day, hour=None, minute=None, second=None, microsecond=None, time_unit=Wrap(TimeUnit::Microseconds), time_zone=None, ambiguous=PyExpr::from(dsl::lit(String::from("raise")))))]
+#[pyo3(signature = (year, month, day, hour=None, minute=None, second=None, microsecond=None, time_unit=Wrap(TimeUnit::Microseconds), time_zone=None, ambiguous=None))]
 pub fn datetime(
     year: PyExpr,
     month: PyExpr,
@@ -271,13 +249,15 @@ pub fn datetime(
     microsecond: Option<PyExpr>,
     time_unit: Wrap<TimeUnit>,
     time_zone: Option<Wrap<TimeZone>>,
-    ambiguous: PyExpr,
+    ambiguous: Option<PyExpr>,
 ) -> PyExpr {
     let year = year.inner;
     let month = month.inner;
     let day = day.inner;
     set_unwrapped_or_0!(hour, minute, second, microsecond);
-    let ambiguous = ambiguous.inner;
+    let ambiguous = ambiguous
+        .map(|e| e.inner)
+        .unwrap_or(dsl::lit(String::from("raise")));
     let time_unit = time_unit.0;
     let time_zone = time_zone.map(|x| x.0);
     let args = DatetimeArgs {
@@ -414,14 +394,7 @@ pub fn first() -> PyExpr {
 pub fn fold(acc: PyExpr, lambda: PyObject, exprs: Vec<PyExpr>) -> PyExpr {
     let exprs = exprs.to_exprs();
 
-    let func = move |a: Column, b: Column| {
-        binary_lambda(
-            &lambda,
-            a.take_materialized_series(),
-            b.take_materialized_series(),
-        )
-        .map(|v| v.map(Column::from))
-    };
+    let func = move |a: Series, b: Series| binary_lambda(&lambda, a, b);
     dsl::fold_exprs(acc.inner, func, exprs).into()
 }
 
@@ -457,7 +430,7 @@ pub fn lit(value: &Bound<'_, PyAny>, allow_object: bool, is_scalar: bool) -> PyR
             let av = s
                 .get(0)
                 .map_err(|_| PyValueError::new_err("expected at least 1 value"))?;
-            let av = av.into_static();
+            let av = av.into_static().map_err(PyPolarsErr::from)?;
             Ok(dsl::lit(Scalar::new(s.dtype().clone(), av)).into())
         } else {
             Ok(dsl::lit(s).into())
@@ -466,27 +439,37 @@ pub fn lit(value: &Bound<'_, PyAny>, allow_object: bool, is_scalar: bool) -> PyR
         Ok(dsl::lit(Null {}).into())
     } else if let Ok(value) = value.downcast::<PyBytes>() {
         Ok(dsl::lit(value.as_bytes()).into())
+    } else if matches!(
+        value.get_type().qualname().unwrap().as_str(),
+        "date" | "datetime" | "time" | "timedelta" | "Decimal"
+    ) {
+        let av = py_object_to_any_value(value, true)?;
+        Ok(Expr::Literal(LiteralValue::try_from(av).unwrap()).into())
     } else {
-        let av = py_object_to_any_value(value, true, allow_object).map_err(|_| {
-            PyTypeError::new_err(
-                format!(
-                    "cannot create expression literal for value of type {}.\
-                    \n\nHint: Pass `allow_object=True` to accept any value and create a literal of type Object.",
-                    value.get_type().qualname().map(|s|s.to_string()).unwrap_or("unknown".to_owned()),
-                )
-            )
-        })?;
-        match av {
-            #[cfg(feature = "object")]
-            AnyValue::ObjectOwned(_) => {
+        Python::with_gil(|py| {
+            // One final attempt before erroring. Do we have a date/datetime subclass?
+            // E.g. pd.Timestamp, or Freezegun.
+            let datetime_module = PyModule::import_bound(py, "datetime")?;
+            let datetime_class = datetime_module.getattr("datetime")?;
+            let date_class = datetime_module.getattr("date")?;
+            if value.is_instance(&datetime_class)? || value.is_instance(&date_class)? {
+                let av = py_object_to_any_value(value, true)?;
+                Ok(Expr::Literal(LiteralValue::try_from(av).unwrap()).into())
+            } else if allow_object {
                 let s = Python::with_gil(|py| {
                     PySeries::new_object(py, "", vec![ObjectValue::from(value.into_py(py))], false)
                         .series
                 });
                 Ok(dsl::lit(s).into())
-            },
-            _ => Ok(Expr::Literal(LiteralValue::from(av)).into()),
-        }
+            } else {
+                Err(PyTypeError::new_err(format!(
+                    "cannot create expression literal for value of type {}: {}\
+                    \n\nHint: Pass `allow_object=True` to accept any value and create a literal of type Object.",
+                    value.get_type().qualname()?,
+                    value.repr()?
+                )))
+            }
+        })
     }
 }
 
@@ -512,19 +495,11 @@ pub fn pearson_corr(a: PyExpr, b: PyExpr, ddof: u8) -> PyExpr {
 pub fn reduce(lambda: PyObject, exprs: Vec<PyExpr>) -> PyExpr {
     let exprs = exprs.to_exprs();
 
-    let func = move |a: Column, b: Column| {
-        binary_lambda(
-            &lambda,
-            a.take_materialized_series(),
-            b.take_materialized_series(),
-        )
-        .map(|v| v.map(Column::from))
-    };
+    let func = move |a: Series, b: Series| binary_lambda(&lambda, a, b);
     dsl::reduce_exprs(func, exprs).into()
 }
 
 #[pyfunction]
-#[pyo3(signature = (value, n, dtype=None))]
 pub fn repeat(value: PyExpr, n: PyExpr, dtype: Option<Wrap<DataType>>) -> PyResult<PyExpr> {
     let mut value = value.inner;
     let n = n.inner;

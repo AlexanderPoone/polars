@@ -155,7 +155,7 @@ struct GetPages<'a> {
     uri: Option<String>,
 }
 
-impl GetPages<'_> {
+impl<'a> GetPages<'a> {
     async fn next(&mut self) -> Option<PolarsResult<bytes::Bytes>> {
         let uri = self.uri.take()?;
 

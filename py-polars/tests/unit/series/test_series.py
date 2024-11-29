@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import math
 from datetime import date, datetime, time, timedelta
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Iterator, cast
 
 import numpy as np
 import pandas as pd
 import pyarrow as pa
 import pytest
 
+import polars
 import polars as pl
 from polars._utils.construction import iterable_to_pyseries
 from polars.datatypes import (
@@ -23,7 +24,6 @@ from polars.datatypes import (
     Unknown,
 )
 from polars.exceptions import (
-    DuplicateError,
     InvalidOperationError,
     PolarsInefficientMapWarning,
     ShapeError,
@@ -32,7 +32,6 @@ from polars.testing import assert_frame_equal, assert_series_equal
 from tests.unit.utils.pycapsule_utils import PyCapsuleStreamHolder
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
     from zoneinfo import ZoneInfo
 
     from polars._typing import EpochTimeUnit, PolarsDataType, TimeUnit
@@ -56,18 +55,6 @@ def test_cum_agg_with_nulls() -> None:
     assert_series_equal(s.cum_min(), pl.Series("a", [None, 2, None, 2, 2, None]))
     assert_series_equal(s.cum_max(), pl.Series("a", [None, 2, None, 7, 8, None]))
     assert_series_equal(s.cum_prod(), pl.Series("a", [None, 2, None, 14, 112, None]))
-
-
-def test_cum_min_max_bool() -> None:
-    s = pl.Series("a", [None, True, True, None, False, None, True, False, False, None])
-    assert_series_equal(s.cum_min().cast(pl.Int32), s.cast(pl.Int32).cum_min())
-    assert_series_equal(s.cum_max().cast(pl.Int32), s.cast(pl.Int32).cum_max())
-    assert_series_equal(
-        s.cum_min(reverse=True).cast(pl.Int32), s.cast(pl.Int32).cum_min(reverse=True)
-    )
-    assert_series_equal(
-        s.cum_max(reverse=True).cast(pl.Int32), s.cast(pl.Int32).cum_max(reverse=True)
-    )
 
 
 def test_init_inputs(monkeypatch: Any) -> None:
@@ -972,7 +959,7 @@ def test_round_sig_figs(
 
 
 def test_round_sig_figs_raises_exc() -> None:
-    with pytest.raises(pl.exceptions.InvalidOperationError):
+    with pytest.raises(polars.exceptions.InvalidOperationError):
         pl.Series([1.234, 0.1234]).round_sig_figs(digits=0)
 
 
@@ -994,7 +981,6 @@ def test_reinterpret() -> None:
 def test_mode() -> None:
     s = pl.Series("a", [1, 1, 2])
     assert s.mode().to_list() == [1]
-    assert s.set_sorted().mode().to_list() == [1]
 
     df = pl.DataFrame([s])
     assert df.select([pl.col("a").mode()])["a"].to_list() == [1]
@@ -1005,7 +991,7 @@ def test_mode() -> None:
     assert pl.Series([1.0, 2.0, 3.0, 2.0]).mode().item() == 2.0
 
     # sorted data
-    assert set(pl.int_range(0, 3, eager=True).mode().to_list()) == {0, 1, 2}
+    assert pl.int_range(0, 3, eager=True).mode().to_list() == [2, 1, 0]
 
 
 def test_diff() -> None:
@@ -1167,7 +1153,7 @@ def test_from_generator_or_iterable() -> None:
 
     # iterable object
     class Data:
-        def __init__(self, n: int) -> None:
+        def __init__(self, n: int):
             self._n = n
 
         def __iter__(self) -> Iterator[int]:
@@ -1355,13 +1341,6 @@ def test_to_dummies_drop_first() -> None:
         schema={"a_2": pl.UInt8, "a_3": pl.UInt8},
     )
     assert_frame_equal(result, expected)
-
-
-def test_to_dummies_null_clash_19096() -> None:
-    with pytest.raises(
-        DuplicateError, match="column with name '_null' has more than one occurrence"
-    ):
-        pl.Series([None, "null"]).to_dummies()
 
 
 def test_chunk_lengths() -> None:

@@ -13,7 +13,6 @@ fn array() -> MapArray {
 
     let field = StructArray::new(
         dt(),
-        3,
         vec![
             Box::new(Utf8Array::<i32>::from_slice(["a", "aa", "aaa"])) as _,
             Box::new(Utf8Array::<i32>::from_slice(["b", "bb", "bbb"])),
@@ -37,7 +36,6 @@ fn basics() {
         array.value(0),
         Box::new(StructArray::new(
             dt(),
-            1,
             vec![
                 Box::new(Utf8Array::<i32>::from_slice(["a"])) as _,
                 Box::new(Utf8Array::<i32>::from_slice(["b"])),
@@ -51,7 +49,6 @@ fn basics() {
         sliced.value(0),
         Box::new(StructArray::new(
             dt(),
-            1,
             vec![
                 Box::new(Utf8Array::<i32>::from_slice(["aa"])) as _,
                 Box::new(Utf8Array::<i32>::from_slice(["bb"])),
@@ -69,7 +66,6 @@ fn split_at() {
         lhs.value(0),
         Box::new(StructArray::new(
             dt(),
-            1,
             vec![
                 Box::new(Utf8Array::<i32>::from_slice(["a"])) as _,
                 Box::new(Utf8Array::<i32>::from_slice(["b"])),
@@ -81,7 +77,6 @@ fn split_at() {
         rhs.value(0),
         Box::new(StructArray::new(
             dt(),
-            1,
             vec![
                 Box::new(Utf8Array::<i32>::from_slice(["aa"])) as _,
                 Box::new(Utf8Array::<i32>::from_slice(["bb"])),
@@ -93,7 +88,6 @@ fn split_at() {
         rhs.value(1),
         Box::new(StructArray::new(
             dt(),
-            1,
             vec![
                 Box::new(Utf8Array::<i32>::from_slice(["aaa"])) as _,
                 Box::new(Utf8Array::<i32>::from_slice(["bbb"])),

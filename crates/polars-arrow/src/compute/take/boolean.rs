@@ -59,8 +59,6 @@ unsafe fn take_values_indices_validity(
 }
 
 /// `take` implementation for boolean arrays
-/// # Safety
-/// The indices must be in-bounds.
 pub unsafe fn take_unchecked(
     values: &BooleanArray,
     indices: &PrimitiveArray<IdxSize>,

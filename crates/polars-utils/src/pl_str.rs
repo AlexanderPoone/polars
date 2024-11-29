@@ -13,11 +13,7 @@ type Inner = compact_str::CompactString;
 
 /// String type that inlines small strings.
 #[derive(Clone, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(
-    feature = "serde",
-    derive(serde::Serialize, serde::Deserialize),
-    serde(transparent)
-)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PlSmallStr(Inner);
 
 impl PlSmallStr {
@@ -58,7 +54,7 @@ impl Default for PlSmallStr {
     }
 }
 
-// AsRef, Deref and Borrow impls to &str
+/// AsRef, Deref and Borrow impls to &str
 
 impl AsRef<str> for PlSmallStr {
     #[inline(always)]
@@ -83,7 +79,7 @@ impl core::borrow::Borrow<str> for PlSmallStr {
     }
 }
 
-// AsRef impls for other types
+/// AsRef impls for other types
 
 impl AsRef<std::path::Path> for PlSmallStr {
     #[inline(always)]
@@ -106,7 +102,7 @@ impl AsRef<std::ffi::OsStr> for PlSmallStr {
     }
 }
 
-// From impls
+/// From impls
 
 impl From<&str> for PlSmallStr {
     #[inline(always)]
@@ -136,7 +132,7 @@ impl From<Inner> for PlSmallStr {
     }
 }
 
-// FromIterator impls
+/// FromIterator impls
 
 impl FromIterator<PlSmallStr> for PlSmallStr {
     #[inline(always)]
@@ -194,7 +190,7 @@ impl<'a> FromIterator<std::borrow::Cow<'a, str>> for PlSmallStr {
     }
 }
 
-// PartialEq impls
+/// PartialEq impls
 
 impl<T> PartialEq<T> for PlSmallStr
 where
@@ -220,7 +216,7 @@ impl PartialEq<PlSmallStr> for String {
     }
 }
 
-// Write
+/// Write
 
 impl core::fmt::Write for PlSmallStr {
     #[inline(always)]
@@ -239,7 +235,7 @@ impl core::fmt::Write for PlSmallStr {
     }
 }
 
-// Debug, Display
+/// Debug, Display
 
 impl core::fmt::Debug for PlSmallStr {
     #[inline(always)]

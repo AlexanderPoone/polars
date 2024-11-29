@@ -14,14 +14,13 @@ use polars_io::utils::byte_source::DynByteSourceBuilder;
 use polars_plan::plans::hive::HivePartitions;
 use polars_plan::plans::{FileInfo, ScanSources};
 use polars_plan::prelude::FileScanOptions;
-use polars_utils::index::AtomicIdxSize;
-use polars_utils::pl_str::PlSmallStr;
+use row_group_decode::RowGroupDecoder;
 
 use super::compute_node_prelude::*;
 use super::{MorselSeq, TaskPriority};
+use crate::async_executor::{self};
 use crate::async_primitives::wait_group::WaitToken;
 use crate::morsel::SourceToken;
-use crate::utils::task_handles_ext;
 
 mod init;
 mod mem_prefetch_funcs;
@@ -30,10 +29,10 @@ mod metadata_utils;
 mod row_group_data_fetch;
 mod row_group_decode;
 
-type AsyncTaskData = (
+type AsyncTaskData = Option<(
     Vec<crate::async_primitives::connector::Receiver<(DataFrame, MorselSeq, WaitToken)>>,
-    task_handles_ext::AbortOnDropHandle<PolarsResult<()>>,
-);
+    async_executor::AbortOnDropHandle<PolarsResult<()>>,
+)>;
 
 #[allow(clippy::type_complexity)]
 pub struct ParquetSourceNode {
@@ -44,24 +43,19 @@ pub struct ParquetSourceNode {
     options: ParquetOptions,
     cloud_options: Option<CloudOptions>,
     file_options: FileScanOptions,
-    first_metadata: Option<Arc<FileMetadata>>,
+    first_metadata: Arc<FileMetadata>,
     // Run-time vars
     config: Config,
     verbose: bool,
     physical_predicate: Option<Arc<dyn PhysicalIoExpr>>,
-    schema: Option<Arc<ArrowSchema>>,
-    projected_arrow_schema: Option<Arc<ArrowSchema>>,
+    projected_arrow_schema: Arc<ArrowSchema>,
     byte_source_builder: DynByteSourceBuilder,
     memory_prefetch_func: fn(&[u8]) -> (),
-    /// The offset is an AtomicIdxSize, as in the negative slice case, the row
-    /// offset becomes relative to the starting point in the list of files,
-    /// so the row index offset needs to be updated by the initializer to
-    /// reflect this (https://github.com/pola-rs/polars/issues/19607).
-    row_index: Option<Arc<(PlSmallStr, AtomicIdxSize)>>,
     // This permit blocks execution until the first morsel is requested.
     morsel_stream_starter: Option<tokio::sync::oneshot::Sender<()>>,
     // This is behind a Mutex so that we can call `shutdown()` asynchronously.
-    async_task_data: Arc<tokio::sync::Mutex<Option<AsyncTaskData>>>,
+    async_task_data: Arc<tokio::sync::Mutex<AsyncTaskData>>,
+    row_group_decoder: Option<Arc<RowGroupDecoder>>,
     is_finished: Arc<AtomicBool>,
 }
 
@@ -88,8 +82,8 @@ impl ParquetSourceNode {
         predicate: Option<Arc<dyn PhysicalExpr>>,
         options: ParquetOptions,
         cloud_options: Option<CloudOptions>,
-        mut file_options: FileScanOptions,
-        first_metadata: Option<Arc<FileMetadata>>,
+        file_options: FileScanOptions,
+        first_metadata: Arc<FileMetadata>,
     ) -> Self {
         let verbose = config::verbose();
 
@@ -99,11 +93,6 @@ impl ParquetSourceNode {
             DynByteSourceBuilder::Mmap
         };
         let memory_prefetch_func = get_memory_prefetch_func(verbose);
-
-        let row_index = file_options
-            .row_index
-            .take()
-            .map(|ri| Arc::new((ri.name, AtomicIdxSize::new(ri.offset))));
 
         Self {
             scan_sources,
@@ -125,14 +114,13 @@ impl ParquetSourceNode {
             },
             verbose,
             physical_predicate: None,
-            schema: None,
-            projected_arrow_schema: None,
+            projected_arrow_schema: Arc::new(ArrowSchema::default()),
             byte_source_builder,
             memory_prefetch_func,
-            row_index,
 
             morsel_stream_starter: None,
             async_task_data: Arc::new(tokio::sync::Mutex::new(None)),
+            row_group_decoder: None,
             is_finished: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -169,18 +157,18 @@ impl ComputeNode for ParquetSourceNode {
             eprintln!("[ParquetSource]: {:?}", &self.config);
         }
 
-        self.schema = Some(self.file_info.reader_schema.take().unwrap().unwrap_left());
-
         self.init_projected_arrow_schema();
         self.physical_predicate = self.predicate.clone().map(phys_expr_to_io_expr);
 
-        let (raw_morsel_receivers, raw_morsel_distributor_task_handle) =
-            self.init_raw_morsel_distributor();
+        let (raw_morsel_receivers, morsel_stream_task_handle) = self.init_raw_morsel_stream();
 
         self.async_task_data
             .try_lock()
             .unwrap()
-            .replace((raw_morsel_receivers, raw_morsel_distributor_task_handle));
+            .replace((raw_morsel_receivers, morsel_stream_task_handle));
+
+        let row_group_decoder = self.init_row_group_decoder();
+        self.row_group_decoder = Some(Arc::new(row_group_decoder));
     }
 
     fn update_state(&mut self, recv: &mut [PortState], send: &mut [PortState]) -> PolarsResult<()> {
@@ -211,18 +199,18 @@ impl ComputeNode for ParquetSourceNode {
     fn spawn<'env, 's>(
         &'env mut self,
         scope: &'s TaskScope<'s, 'env>,
-        recv_ports: &mut [Option<RecvPort<'_>>],
-        send_ports: &mut [Option<SendPort<'_>>],
+        recv: &mut [Option<RecvPort<'_>>],
+        send: &mut [Option<SendPort<'_>>],
         _state: &'s ExecutionState,
         join_handles: &mut Vec<JoinHandle<PolarsResult<()>>>,
     ) {
         use std::sync::atomic::Ordering;
 
-        assert!(recv_ports.is_empty());
-        assert_eq!(send_ports.len(), 1);
+        assert!(recv.is_empty());
+        assert_eq!(send.len(), 1);
         assert!(!self.is_finished.load(Ordering::Relaxed));
 
-        let morsel_senders = send_ports[0].take().unwrap().parallel();
+        let morsel_senders = send[0].take().unwrap().parallel();
 
         let mut async_task_data_guard = self.async_task_data.try_lock().unwrap();
         let (raw_morsel_receivers, _) = async_task_data_guard.as_mut().unwrap();
@@ -234,14 +222,14 @@ impl ComputeNode for ParquetSourceNode {
         }
         let is_finished = self.is_finished.clone();
 
-        let source_token = SourceToken::new();
         let task_handles = raw_morsel_receivers
             .drain(..)
             .zip(morsel_senders)
             .map(|(mut raw_morsel_rx, mut morsel_tx)| {
                 let is_finished = is_finished.clone();
-                let source_token = source_token.clone();
+
                 scope.spawn_task(TaskPriority::Low, async move {
+                    let source_token = SourceToken::new();
                     loop {
                         let Ok((df, morsel_seq, wait_token)) = raw_morsel_rx.recv().await else {
                             is_finished.store(true, Ordering::Relaxed);

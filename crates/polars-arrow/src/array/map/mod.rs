@@ -4,6 +4,8 @@ use crate::bitmap::Bitmap;
 use crate::datatypes::{ArrowDataType, Field};
 use crate::offset::OffsetsBuffer;
 
+#[cfg(feature = "arrow_rs")]
+mod data;
 mod ffi;
 pub(super) mod fmt;
 mod iterator;

@@ -67,7 +67,7 @@ impl CsvExec {
                 let source = self.sources.at(i);
                 let owned = &mut vec![];
 
-                let memslice = source.to_memslice_async_assume_latest(run_async)?;
+                let memslice = source.to_memslice_async_latest(run_async)?;
 
                 let reader = std::io::Cursor::new(maybe_decompress_bytes(&memslice, owned)?);
                 let mut df = options
@@ -79,11 +79,9 @@ impl CsvExec {
                     let name = source.to_include_path_name();
 
                     unsafe {
-                        df.with_column_unchecked(Column::new_scalar(
-                            col.clone(),
-                            Scalar::new(DataType::String, AnyValue::StringOwned(name.into())),
-                            df.height(),
-                        ))
+                        df.with_column_unchecked(
+                            StringChunked::full(col.clone(), name, df.height()).into_series(),
+                        )
                     };
                 }
 

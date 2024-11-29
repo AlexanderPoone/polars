@@ -5,9 +5,9 @@ mod is_in;
 
 use std::borrow::Cow;
 
+use arrow::temporal_conversions::{time_unit_multiple, SECONDS_IN_DAY};
 use binary::process_binary;
 use either::Either;
-use polars_compute::cast::temporal::{time_unit_multiple, SECONDS_IN_DAY};
 use polars_core::chunked_array::cast::CastOptions;
 use polars_core::prelude::*;
 use polars_core::utils::{get_supertype, get_supertype_with_options, materialize_dyn_int};
@@ -419,7 +419,7 @@ fn inline_or_prune_cast(
             },
             LiteralValue::StrCat(s) => {
                 let av = AnyValue::String(s).strict_cast(dtype);
-                return Ok(av.map(|av| AExpr::Literal(av.into())));
+                return Ok(av.map(|av| AExpr::Literal(av.try_into().unwrap())));
             },
             // We generate casted literal datetimes, so ensure we cast upon conversion
             // to create simpler expr trees.
@@ -431,7 +431,7 @@ fn inline_or_prune_cast(
             lv @ (LiteralValue::Int(_) | LiteralValue::Float(_)) => {
                 let av = lv.to_any_value().ok_or_else(|| polars_err!(InvalidOperation: "literal value: {:?} too large for Polars", lv))?;
                 let av = av.strict_cast(dtype);
-                return Ok(av.map(|av| AExpr::Literal(av.into())));
+                return Ok(av.map(|av| AExpr::Literal(av.try_into().unwrap())));
             },
             LiteralValue::Null => match dtype {
                 DataType::Unknown(UnknownKind::Float | UnknownKind::Int(_) | UnknownKind::Str) => {
@@ -469,7 +469,7 @@ fn inline_or_prune_cast(
                                 None => return Ok(None),
                             }
                         };
-                        out.into()
+                        out.try_into()?
                     },
                 }
             },
@@ -531,7 +531,7 @@ mod test {
         let optimizer = StackOptimizer {};
         let rules: &mut [Box<dyn OptimizationRule>] = &mut [Box::new(TypeCoercionRule {})];
 
-        let df = DataFrame::new(Vec::from([Column::new_empty(
+        let df = DataFrame::new(Vec::from([Series::new_empty(
             PlSmallStr::from_static("fruits"),
             &DataType::Categorical(None, Default::default()),
         )]))

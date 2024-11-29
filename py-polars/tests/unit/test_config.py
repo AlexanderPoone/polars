@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from textwrap import dedent
-from typing import TYPE_CHECKING, Any
+from typing import Any, Iterator
 
 import pytest
 
@@ -11,9 +10,6 @@ import polars as pl
 import polars.polars as plr
 from polars._utils.unstable import issue_unstable_warning
 from polars.config import _POLARS_CFG_ENV_VARS
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 
 @pytest.fixture(autouse=True)
@@ -24,24 +20,19 @@ def _environ() -> Iterator[None]:
 
 
 def test_ascii_tables() -> None:
-    df = pl.DataFrame(
-        {
-            "a": [1, 2],
-            "b": [4, 5],
-            "c": [[list(range(1, 26))], [list(range(1, 76))]],
-        }
-    )
+    df = pl.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6], "c": [7, 8, 9]})
 
     ascii_table_repr = (
-        "shape: (2, 3)\n"
-        "+-----+-----+------------------+\n"
-        "| a   | b   | c                |\n"
-        "| --- | --- | ---              |\n"
-        "| i64 | i64 | list[list[i64]]  |\n"
-        "+==============================+\n"
-        "| 1   | 4   | [[1, 2, ... 25]] |\n"
-        "| 2   | 5   | [[1, 2, ... 75]] |\n"
-        "+-----+-----+------------------+"
+        "shape: (3, 3)\n"
+        "+-----+-----+-----+\n"
+        "| a   | b   | c   |\n"
+        "| --- | --- | --- |\n"
+        "| i64 | i64 | i64 |\n"
+        "+=================+\n"
+        "| 1   | 4   | 7   |\n"
+        "| 2   | 5   | 8   |\n"
+        "| 3   | 6   | 9   |\n"
+        "+-----+-----+-----+"
     )
     # note: expect to render ascii only within the given scope
     with pl.Config(set_ascii_tables=True):
@@ -49,15 +40,16 @@ def test_ascii_tables() -> None:
 
     # confirm back to utf8 default after scope-exit
     assert (
-        repr(df) == "shape: (2, 3)\n"
-        "┌─────┬─────┬─────────────────┐\n"
-        "│ a   ┆ b   ┆ c               │\n"
-        "│ --- ┆ --- ┆ ---             │\n"
-        "│ i64 ┆ i64 ┆ list[list[i64]] │\n"
-        "╞═════╪═════╪═════════════════╡\n"
-        "│ 1   ┆ 4   ┆ [[1, 2, … 25]]  │\n"
-        "│ 2   ┆ 5   ┆ [[1, 2, … 75]]  │\n"
-        "└─────┴─────┴─────────────────┘"
+        repr(df) == "shape: (3, 3)\n"
+        "┌─────┬─────┬─────┐\n"
+        "│ a   ┆ b   ┆ c   │\n"
+        "│ --- ┆ --- ┆ --- │\n"
+        "│ i64 ┆ i64 ┆ i64 │\n"
+        "╞═════╪═════╪═════╡\n"
+        "│ 1   ┆ 4   ┆ 7   │\n"
+        "│ 2   ┆ 5   ┆ 8   │\n"
+        "│ 3   ┆ 6   ┆ 9   │\n"
+        "└─────┴─────┴─────┘"
     )
 
     @pl.Config(set_ascii_tables=True)
@@ -131,7 +123,7 @@ def test_set_tbl_rows() -> None:
         "│ …   ┆ …   ┆ …   │\n"
         "└─────┴─────┴─────┘"
     )
-    assert str(ser) == "shape: (5,)\nSeries: 'ser' [i64]\n[\n\t…\n]"
+    assert str(ser) == "shape: (5,)\n" "Series: 'ser' [i64]\n" "[\n" "\t…\n" "]"
 
     pl.Config.set_tbl_rows(1)
     assert (
@@ -145,7 +137,7 @@ def test_set_tbl_rows() -> None:
         "│ …   ┆ …   ┆ …   │\n"
         "└─────┴─────┴─────┘"
     )
-    assert str(ser) == "shape: (5,)\nSeries: 'ser' [i64]\n[\n\t1\n\t…\n]"
+    assert str(ser) == "shape: (5,)\n" "Series: 'ser' [i64]\n" "[\n" "\t1\n" "\t…\n" "]"
 
     pl.Config.set_tbl_rows(2)
     assert (
@@ -487,7 +479,7 @@ def test_shape_format_for_big_numbers() -> None:
 
     pl.Config.set_tbl_rows(0)
     ser = pl.Series("ser", range(1000))
-    assert str(ser) == "shape: (1_000,)\nSeries: 'ser' [i64]\n[\n\t…\n]"
+    assert str(ser) == "shape: (1_000,)\n" "Series: 'ser' [i64]\n" "[\n" "\t…\n" "]"
 
     pl.Config.set_tbl_rows(1)
     pl.Config.set_tbl_cols(1)
@@ -500,16 +492,6 @@ def test_shape_format_for_big_numbers() -> None:
         "╞═════════╪═══╡\n"
         "│ 1       ┆ … │\n"
         "╰─────────┴───╯"
-    )
-
-    pl.Config.set_tbl_formatting("ASCII_FULL_CONDENSED")
-    assert (
-        str(df) == "shape: (1, 1_000)\n"
-        "+---------+-----+\n"
-        "| 0 (i64) | ... |\n"
-        "+===============+\n"
-        "| 1       | ... |\n"
-        "+---------+-----+"
     )
 
 
@@ -754,7 +736,7 @@ def test_config_scope() -> None:
 
 
 def test_config_raise_error_if_not_exist() -> None:
-    with pytest.raises(AttributeError), pl.Config(i_do_not_exist=True):  # type: ignore[call-arg]
+    with pytest.raises(AttributeError), pl.Config(i_do_not_exist=True):
         pass
 
 
@@ -784,79 +766,6 @@ def test_set_fmt_str_lengths_invalid_length() -> None:
             cfg.set_fmt_str_lengths(0)
         with pytest.raises(ValueError):
             cfg.set_fmt_str_lengths(-2)
-
-
-def test_truncated_rows_cols_values_ascii() -> None:
-    df = pl.DataFrame({f"c{n}": list(range(-n, 100 - n)) for n in range(10)})
-
-    pl.Config.set_tbl_formatting("UTF8_BORDERS_ONLY", rounded_corners=True)
-    assert (
-        str(df) == "shape: (100, 10)\n"
-        "╭───────────────────────────────────────────────────╮\n"
-        "│ c0    c1    c2    c3    …   c6    c7    c8    c9  │\n"
-        "│ ---   ---   ---   ---       ---   ---   ---   --- │\n"
-        "│ i64   i64   i64   i64       i64   i64   i64   i64 │\n"
-        "╞═══════════════════════════════════════════════════╡\n"
-        "│ 0     -1    -2    -3    …   -6    -7    -8    -9  │\n"
-        "│ 1     0     -1    -2    …   -5    -6    -7    -8  │\n"
-        "│ 2     1     0     -1    …   -4    -5    -6    -7  │\n"
-        "│ 3     2     1     0     …   -3    -4    -5    -6  │\n"
-        "│ 4     3     2     1     …   -2    -3    -4    -5  │\n"
-        "│ …     …     …     …     …   …     …     …     …   │\n"
-        "│ 95    94    93    92    …   89    88    87    86  │\n"
-        "│ 96    95    94    93    …   90    89    88    87  │\n"
-        "│ 97    96    95    94    …   91    90    89    88  │\n"
-        "│ 98    97    96    95    …   92    91    90    89  │\n"
-        "│ 99    98    97    96    …   93    92    91    90  │\n"
-        "╰───────────────────────────────────────────────────╯"
-    )
-    with pl.Config(tbl_formatting="ASCII_FULL_CONDENSED"):
-        assert (
-            str(df) == "shape: (100, 10)\n"
-            "+-----+-----+-----+-----+-----+-----+-----+-----+-----+\n"
-            "| c0  | c1  | c2  | c3  | ... | c6  | c7  | c8  | c9  |\n"
-            "| --- | --- | --- | --- |     | --- | --- | --- | --- |\n"
-            "| i64 | i64 | i64 | i64 |     | i64 | i64 | i64 | i64 |\n"
-            "+=====================================================+\n"
-            "| 0   | -1  | -2  | -3  | ... | -6  | -7  | -8  | -9  |\n"
-            "| 1   | 0   | -1  | -2  | ... | -5  | -6  | -7  | -8  |\n"
-            "| 2   | 1   | 0   | -1  | ... | -4  | -5  | -6  | -7  |\n"
-            "| 3   | 2   | 1   | 0   | ... | -3  | -4  | -5  | -6  |\n"
-            "| 4   | 3   | 2   | 1   | ... | -2  | -3  | -4  | -5  |\n"
-            "| ... | ... | ... | ... | ... | ... | ... | ... | ... |\n"
-            "| 95  | 94  | 93  | 92  | ... | 89  | 88  | 87  | 86  |\n"
-            "| 96  | 95  | 94  | 93  | ... | 90  | 89  | 88  | 87  |\n"
-            "| 97  | 96  | 95  | 94  | ... | 91  | 90  | 89  | 88  |\n"
-            "| 98  | 97  | 96  | 95  | ... | 92  | 91  | 90  | 89  |\n"
-            "| 99  | 98  | 97  | 96  | ... | 93  | 92  | 91  | 90  |\n"
-            "+-----+-----+-----+-----+-----+-----+-----+-----+-----+"
-        )
-
-    with pl.Config(tbl_formatting="MARKDOWN"):
-        df = pl.DataFrame({"b": [b"0tigohij1prisdfj1gs2io3fbjg0pfihodjgsnfbbmfgnd8j"]})
-        assert (
-            str(df)
-            == dedent("""
-            shape: (1, 1)
-            | b                               |
-            | ---                             |
-            | binary                          |
-            |---------------------------------|
-            | b"0tigohij1prisdfj1gs2io3fbjg0… |""").lstrip()
-        )
-
-    with pl.Config(tbl_formatting="ASCII_MARKDOWN"):
-        df = pl.DataFrame({"b": [b"0tigohij1prisdfj1gs2io3fbjg0pfihodjgsnfbbmfgnd8j"]})
-        assert (
-            str(df)
-            == dedent("""
-            shape: (1, 1)
-            | b                                 |
-            | ---                               |
-            | binary                            |
-            |-----------------------------------|
-            | b"0tigohij1prisdfj1gs2io3fbjg0... |""").lstrip()
-        )
 
 
 def test_warn_unstable(recwarn: pytest.WarningsRecorder) -> None:

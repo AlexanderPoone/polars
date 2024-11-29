@@ -4,7 +4,6 @@ extend-exclude = [
   "*.csv",
   "*.gz",
   "dists.dss",
-  "**/images/*",
 ]
 ignore-hidden = false
 

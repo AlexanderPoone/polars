@@ -1,4 +1,5 @@
 mod iterator;
+mod mutable;
 
 use arrow::array::*;
 use arrow::bitmap::Bitmap;
@@ -15,7 +16,6 @@ fn array() -> StructArray {
 
     StructArray::new(
         ArrowDataType::Struct(fields),
-        boolean.len(),
         vec![boolean.clone(), int.clone()],
         Some(Bitmap::from([true, true, false, true])),
     )

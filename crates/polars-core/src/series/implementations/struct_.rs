@@ -232,14 +232,7 @@ impl SeriesTrait for SeriesWrap<StructChunked> {
     }
 
     fn reverse(&self) -> Series {
-        let validity = self
-            .rechunk_validity()
-            .map(|x| x.into_iter().rev().collect::<Bitmap>());
-        self.0
-            ._apply_fields(|s| s.reverse())
-            .unwrap()
-            .with_outer_validity(validity)
-            .into_series()
+        self.0._apply_fields(|s| s.reverse()).unwrap().into_series()
     }
 
     fn shift(&self, periods: i64) -> Series {

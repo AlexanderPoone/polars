@@ -18,9 +18,6 @@ use compare_inner::NonNull;
 use rayon::prelude::*;
 pub use slice::*;
 
-use crate::chunked_array::ops::row_encode::{
-    _get_rows_encoded_ca, convert_series_for_row_encoding,
-};
 use crate::prelude::compare_inner::TotalOrdInner;
 use crate::prelude::sort::arg_sort_multiple::*;
 use crate::prelude::*;
@@ -138,7 +135,7 @@ macro_rules! sort_with_fast_path {
                 // if the nulls are already last we can clone
                 if $options.nulls_last && $ca.get($ca.len() - 1).is_none()  ||
                 // if the nulls are already first we can clone
-                (!$options.nulls_last && $ca.get(0).is_none())
+                $ca.get(0).is_none()
                 {
                     return $ca.clone();
                 }
@@ -239,7 +236,7 @@ where
 
 fn arg_sort_multiple_numeric<T: PolarsNumericType>(
     ca: &ChunkedArray<T>,
-    by: &[Column],
+    by: &[Series],
     options: &SortMultipleOptions,
 ) -> PolarsResult<IdxCa> {
     args_validate(ca, by, &options.descending, "descending")?;
@@ -297,7 +294,7 @@ where
     /// We assume that all numeric `Series` are of the same type, if not it will panic
     fn arg_sort_multiple(
         &self,
-        by: &[Column],
+        by: &[Series],
         options: &SortMultipleOptions,
     ) -> PolarsResult<IdxCa> {
         arg_sort_multiple_numeric(self, by, options)
@@ -335,7 +332,6 @@ impl ChunkSort<StringType> for StringChunked {
             nulls_last: false,
             multithreaded: true,
             maintain_order: false,
-            limit: None,
         })
     }
 
@@ -353,7 +349,7 @@ impl ChunkSort<StringType> for StringChunked {
     ///
     fn arg_sort_multiple(
         &self,
-        by: &[Column],
+        by: &[Series],
         options: &SortMultipleOptions,
     ) -> PolarsResult<IdxCa> {
         self.as_binary().arg_sort_multiple(by, options)
@@ -407,7 +403,6 @@ impl ChunkSort<BinaryType> for BinaryChunked {
             nulls_last: false,
             multithreaded: true,
             maintain_order: false,
-            limit: None,
         })
     }
 
@@ -432,7 +427,7 @@ impl ChunkSort<BinaryType> for BinaryChunked {
 
     fn arg_sort_multiple(
         &self,
-        by: &[Column],
+        by: &[Series],
         options: &SortMultipleOptions,
     ) -> PolarsResult<IdxCa> {
         args_validate(self, by, &options.descending, "descending")?;
@@ -538,7 +533,6 @@ impl ChunkSort<BinaryOffsetType> for BinaryOffsetChunked {
             nulls_last: false,
             multithreaded: true,
             maintain_order: false,
-            limit: None,
         })
     }
 
@@ -580,7 +574,7 @@ impl ChunkSort<BinaryOffsetType> for BinaryOffsetChunked {
     /// uphold this contract. If not, it will panic.
     fn arg_sort_multiple(
         &self,
-        by: &[Column],
+        by: &[Series],
         options: &SortMultipleOptions,
     ) -> PolarsResult<IdxCa> {
         args_validate(self, by, &options.descending, "descending")?;
@@ -605,7 +599,7 @@ impl StructChunked {
     pub(crate) fn arg_sort(&self, options: SortOptions) -> IdxCa {
         let bin = _get_rows_encoded_ca(
             self.name().clone(),
-            &[self.clone().into_column()],
+            &[self.clone().into_series()],
             &[options.descending],
             &[options.nulls_last],
         )
@@ -675,7 +669,6 @@ impl ChunkSort<BooleanType> for BooleanChunked {
             nulls_last: false,
             multithreaded: true,
             maintain_order: false,
-            limit: None,
         })
     }
 
@@ -699,7 +692,7 @@ impl ChunkSort<BooleanType> for BooleanChunked {
     }
     fn arg_sort_multiple(
         &self,
-        by: &[Column],
+        by: &[Series],
         options: &SortMultipleOptions,
     ) -> PolarsResult<IdxCa> {
         let mut vals = Vec::with_capacity(self.len());
@@ -715,6 +708,43 @@ impl ChunkSort<BooleanType> for BooleanChunked {
     }
 }
 
+pub(crate) fn convert_sort_column_multi_sort(s: &Series) -> PolarsResult<Series> {
+    use DataType::*;
+    let out = match s.dtype() {
+        #[cfg(feature = "dtype-categorical")]
+        Categorical(_, _) | Enum(_, _) => s.rechunk(),
+        Binary | Boolean => s.clone(),
+        BinaryOffset => s.clone(),
+        String => s.str().unwrap().as_binary().into_series(),
+        #[cfg(feature = "dtype-struct")]
+        Struct(_) => {
+            let ca = s.struct_().unwrap();
+            let new_fields = ca
+                .fields_as_series()
+                .iter()
+                .map(convert_sort_column_multi_sort)
+                .collect::<PolarsResult<Vec<_>>>()?;
+            let mut out = StructChunked::from_series(ca.name().clone(), &new_fields)?;
+            out.zip_outer_validity(ca);
+            out.into_series()
+        },
+        // we could fallback to default branch, but decimal is not numeric dtype for now, so explicit here
+        #[cfg(feature = "dtype-decimal")]
+        Decimal(_, _) => s.clone(),
+        List(inner) if !inner.is_nested() => s.clone(),
+        Null => s.clone(),
+        _ => {
+            let phys = s.to_physical_repr().into_owned();
+            polars_ensure!(
+                phys.dtype().is_numeric(),
+                InvalidOperation: "cannot sort column of dtype `{}`", s.dtype()
+            );
+            phys
+        },
+    };
+    Ok(out)
+}
+
 pub fn _broadcast_bools(n_cols: usize, values: &mut Vec<bool>) {
     if n_cols > values.len() && values.len() == 1 {
         while n_cols != values.len() {
@@ -724,16 +754,14 @@ pub fn _broadcast_bools(n_cols: usize, values: &mut Vec<bool>) {
 }
 
 pub(crate) fn prepare_arg_sort(
-    columns: Vec<Column>,
+    columns: Vec<Series>,
     sort_options: &mut SortMultipleOptions,
-) -> PolarsResult<(Column, Vec<Column>)> {
+) -> PolarsResult<(Series, Vec<Series>)> {
     let n_cols = columns.len();
 
     let mut columns = columns
         .iter()
-        .map(Column::as_materialized_series)
-        .map(convert_series_for_row_encoding)
-        .map(|s| s.map(Column::from))
+        .map(convert_sort_column_multi_sort)
         .collect::<PolarsResult<Vec<_>>>()?;
 
     _broadcast_bools(n_cols, &mut sort_options.descending);
@@ -801,7 +829,6 @@ mod test {
             nulls_last: false,
             multithreaded: true,
             maintain_order: false,
-            limit: None,
         });
         assert_eq!(
             Vec::from(&out),
@@ -821,7 +848,6 @@ mod test {
             nulls_last: true,
             multithreaded: true,
             maintain_order: false,
-            limit: None,
         });
         assert_eq!(
             Vec::from(&out),
@@ -855,15 +881,11 @@ mod test {
             PlSmallStr::from_static("c"),
             &["a", "b", "c", "d", "e", "f", "g", "h"],
         );
-        let df = DataFrame::new(vec![
-            a.into_series().into(),
-            b.into_series().into(),
-            c.into_series().into(),
-        ])?;
+        let df = DataFrame::new(vec![a.into_series(), b.into_series(), c.into_series()])?;
 
         let out = df.sort(["a", "b", "c"], SortMultipleOptions::default())?;
         assert_eq!(
-            Vec::from(out.column("b")?.as_series().unwrap().i64()?),
+            Vec::from(out.column("b")?.i64()?),
             &[
                 Some(0),
                 Some(2),
@@ -883,7 +905,7 @@ mod test {
         )
         .into_series();
         let b = Int32Chunked::new(PlSmallStr::from_static("b"), &[5, 4, 2, 3, 4, 5]).into_series();
-        let df = DataFrame::new(vec![a.into(), b.into()])?;
+        let df = DataFrame::new(vec![a, b])?;
 
         let out = df.sort(["a", "b"], SortMultipleOptions::default())?;
         let expected = df!(
@@ -931,7 +953,6 @@ mod test {
             nulls_last: false,
             multithreaded: true,
             maintain_order: false,
-            limit: None,
         });
         let expected = &[None, None, Some("a"), Some("b"), Some("c")];
         assert_eq!(Vec::from(&out), expected);
@@ -941,7 +962,6 @@ mod test {
             nulls_last: false,
             multithreaded: true,
             maintain_order: false,
-            limit: None,
         });
 
         let expected = &[None, None, Some("c"), Some("b"), Some("a")];
@@ -952,7 +972,6 @@ mod test {
             nulls_last: true,
             multithreaded: true,
             maintain_order: false,
-            limit: None,
         });
         let expected = &[Some("a"), Some("b"), Some("c"), None, None];
         assert_eq!(Vec::from(&out), expected);
@@ -962,7 +981,6 @@ mod test {
             nulls_last: true,
             multithreaded: true,
             maintain_order: false,
-            limit: None,
         });
         let expected = &[Some("c"), Some("b"), Some("a"), None, None];
         assert_eq!(Vec::from(&out), expected);

@@ -263,7 +263,7 @@ impl SQLExprVisitor<'_> {
             let schema_entry = schema.get_at_index(0);
             if let Some((old_name, _)) = schema_entry {
                 let new_name = String::from(old_name.as_str()) + rand_string.as_str();
-                lf = lf.rename([old_name.to_string()], [new_name.clone()], true);
+                lf = lf.rename([old_name.to_string()], [new_name.clone()]);
                 return Ok(Expr::SubPlan(
                     SpecialEq::new(Arc::new(lf.logical_plan)),
                     vec![new_name],
@@ -374,9 +374,10 @@ impl SQLExprVisitor<'_> {
             },
             // identify "CAST(expr AS type) <op> string" and/or "expr::type <op> string" expressions
             (Expr::Cast { expr, dtype, .. }, Expr::Literal(LiteralValue::String(s))) => {
-                match &**expr {
-                    Expr::Column(name) => (Some(name.clone()), Some(s), Some(dtype)),
-                    _ => (None, Some(s), Some(dtype)),
+                if let Expr::Column(name) = &**expr {
+                    (Some(name.clone()), Some(s), Some(dtype))
+                } else {
+                    (None, Some(s), Some(dtype))
                 }
             },
             _ => (None, None, None),
@@ -384,25 +385,23 @@ impl SQLExprVisitor<'_> {
             if expr_dtype.is_none() && self.active_schema.is_none() {
                 right.clone()
             } else {
-                let left_dtype = expr_dtype.or_else(|| {
-                    self.active_schema
-                        .as_ref()
-                        .and_then(|schema| schema.get(&name))
-                });
+                let left_dtype = expr_dtype
+                    .unwrap_or_else(|| self.active_schema.as_ref().unwrap().get(&name).unwrap());
+
                 match left_dtype {
-                    Some(DataType::Time) if is_iso_time(s) => {
+                    DataType::Time if is_iso_time(s) => {
                         right.clone().str().to_time(StrptimeOptions {
                             strict: true,
                             ..Default::default()
                         })
                     },
-                    Some(DataType::Date) if is_iso_date(s) => {
+                    DataType::Date if is_iso_date(s) => {
                         right.clone().str().to_date(StrptimeOptions {
                             strict: true,
                             ..Default::default()
                         })
                     },
-                    Some(DataType::Datetime(tu, tz)) if is_iso_datetime(s) || is_iso_date(s) => {
+                    DataType::Datetime(tu, tz) if is_iso_datetime(s) || is_iso_date(s) => {
                         if s.len() == 10 {
                             // handle upcast from ISO date string (10 chars) to datetime
                             lit(format!("{}T00:00:00", s))
@@ -470,53 +469,48 @@ impl SQLExprVisitor<'_> {
         rhs = self.convert_temporal_strings(&lhs, &rhs);
 
         Ok(match op {
-            // ----
-            // Bitwise operators
-            // ----
-            SQLBinaryOperator::BitwiseAnd => lhs.and(rhs),  // "x & y"
-            SQLBinaryOperator::BitwiseOr => lhs.or(rhs),  // "x | y"
-            SQLBinaryOperator::Xor => lhs.xor(rhs),  // "x XOR y"
-
-            // ----
-            // General operators
-            // ----
-            SQLBinaryOperator::And => lhs.and(rhs),  // "x AND y"
-            SQLBinaryOperator::Divide => lhs / rhs,  // "x / y"
-            SQLBinaryOperator::DuckIntegerDivide => lhs.floor_div(rhs).cast(DataType::Int64),  // "x // y"
-            SQLBinaryOperator::Eq => lhs.eq(rhs),  // "x = y"
-            SQLBinaryOperator::Gt => lhs.gt(rhs),  // "x > y"
-            SQLBinaryOperator::GtEq => lhs.gt_eq(rhs),  // "x >= y"
-            SQLBinaryOperator::Lt => lhs.lt(rhs),  // "x < y"
-            SQLBinaryOperator::LtEq => lhs.lt_eq(rhs),  // "x <= y"
-            SQLBinaryOperator::Minus => lhs - rhs,  // "x - y"
-            SQLBinaryOperator::Modulo => lhs % rhs,  // "x % y"
-            SQLBinaryOperator::Multiply => lhs * rhs,  // "x * y"
-            SQLBinaryOperator::NotEq => lhs.eq(rhs).not(),  // "x != y"
-            SQLBinaryOperator::Or => lhs.or(rhs),  // "x OR y"
-            SQLBinaryOperator::Plus => lhs + rhs,  // "x + y"
-            SQLBinaryOperator::Spaceship => lhs.eq_missing(rhs),  // "x <=> y"
-            SQLBinaryOperator::StringConcat => {  // "x || y"
+            SQLBinaryOperator::And => lhs.and(rhs),
+            SQLBinaryOperator::Divide => lhs / rhs,
+            SQLBinaryOperator::DuckIntegerDivide => lhs.floor_div(rhs).cast(DataType::Int64),
+            SQLBinaryOperator::Eq => lhs.eq(rhs),
+            SQLBinaryOperator::Gt => lhs.gt(rhs),
+            SQLBinaryOperator::GtEq => lhs.gt_eq(rhs),
+            SQLBinaryOperator::Lt => lhs.lt(rhs),
+            SQLBinaryOperator::LtEq => lhs.lt_eq(rhs),
+            SQLBinaryOperator::Minus => lhs - rhs,
+            SQLBinaryOperator::Modulo => lhs % rhs,
+            SQLBinaryOperator::Multiply => lhs * rhs,
+            SQLBinaryOperator::NotEq => lhs.eq(rhs).not(),
+            SQLBinaryOperator::Or => lhs.or(rhs),
+            SQLBinaryOperator::Plus => lhs + rhs,
+            SQLBinaryOperator::Spaceship => lhs.eq_missing(rhs),
+            SQLBinaryOperator::StringConcat => {
                 lhs.cast(DataType::String) + rhs.cast(DataType::String)
             },
-            SQLBinaryOperator::PGStartsWith => lhs.str().starts_with(rhs),  // "x ^@ y"
+            SQLBinaryOperator::Xor => lhs.xor(rhs),
+            SQLBinaryOperator::PGStartsWith => lhs.str().starts_with(rhs),
             // ----
             // Regular expression operators
             // ----
-            SQLBinaryOperator::PGRegexMatch => match rhs {  // "x ~ y"
+            // "a ~ b"
+            SQLBinaryOperator::PGRegexMatch => match rhs {
                 Expr::Literal(LiteralValue::String(_)) => lhs.str().contains(rhs, true),
                 _ => polars_bail!(SQLSyntax: "invalid pattern for '~' operator: {:?}", rhs),
             },
-            SQLBinaryOperator::PGRegexNotMatch => match rhs {  // "x !~ y"
+            // "a !~ b"
+            SQLBinaryOperator::PGRegexNotMatch => match rhs {
                 Expr::Literal(LiteralValue::String(_)) => lhs.str().contains(rhs, true).not(),
                 _ => polars_bail!(SQLSyntax: "invalid pattern for '!~' operator: {:?}", rhs),
             },
-            SQLBinaryOperator::PGRegexIMatch => match rhs {  // "x ~* y"
+            // "a ~* b"
+            SQLBinaryOperator::PGRegexIMatch => match rhs {
                 Expr::Literal(LiteralValue::String(pat)) => {
                     lhs.str().contains(lit(format!("(?i){}", pat)), true)
                 },
                 _ => polars_bail!(SQLSyntax: "invalid pattern for '~*' operator: {:?}", rhs),
             },
-            SQLBinaryOperator::PGRegexNotIMatch => match rhs {  // "x !~* y"
+            // "a !~* b"
+            SQLBinaryOperator::PGRegexNotIMatch => match rhs {
                 Expr::Literal(LiteralValue::String(pat)) => {
                     lhs.str().contains(lit(format!("(?i){}", pat)), true).not()
                 },
@@ -527,10 +521,10 @@ impl SQLExprVisitor<'_> {
             // ----
             // LIKE/ILIKE operators
             // ----
-            SQLBinaryOperator::PGLikeMatch  // "x ~~ y"
-            | SQLBinaryOperator::PGNotLikeMatch  // "x !~~ y"
-            | SQLBinaryOperator::PGILikeMatch  // "x ~~* y"
-            | SQLBinaryOperator::PGNotILikeMatch => {  // "x !~~* y"
+            SQLBinaryOperator::PGLikeMatch
+            | SQLBinaryOperator::PGNotLikeMatch
+            | SQLBinaryOperator::PGILikeMatch
+            | SQLBinaryOperator::PGNotILikeMatch => {
                 let expr = if matches!(
                     op,
                     SQLBinaryOperator::PGLikeMatch | SQLBinaryOperator::PGNotLikeMatch
@@ -554,7 +548,7 @@ impl SQLExprVisitor<'_> {
             // ----
             // JSON/Struct field access operators
             // ----
-            SQLBinaryOperator::Arrow | SQLBinaryOperator::LongArrow => match rhs {  // "x -> y", "x ->> y"
+            SQLBinaryOperator::Arrow | SQLBinaryOperator::LongArrow => match rhs {
                 Expr::Literal(LiteralValue::String(path)) => {
                     let mut expr = self.struct_field_access_expr(&lhs, &path, false)?;
                     if let SQLBinaryOperator::LongArrow = op {
@@ -573,7 +567,7 @@ impl SQLExprVisitor<'_> {
                     polars_bail!(SQLSyntax: "invalid json/struct path-extract definition: {:?}", right)
                 },
             },
-            SQLBinaryOperator::HashArrow | SQLBinaryOperator::HashLongArrow => {  // "x #> y", "x #>> y"
+            SQLBinaryOperator::HashArrow | SQLBinaryOperator::HashLongArrow => {
                 if let Expr::Literal(LiteralValue::String(path)) = rhs {
                     let mut expr = self.struct_field_access_expr(&lhs, &path, true)?;
                     if let SQLBinaryOperator::HashLongArrow = op {
@@ -919,7 +913,7 @@ impl SQLExprVisitor<'_> {
             }
             let else_res = match else_result {
                 Some(else_res) => self.visit_expr(else_res)?,
-                None => lit(Null), // ELSE clause is optional; when omitted, it is implicitly NULL
+                None => polars_bail!(SQLSyntax: "ELSE expression is required"),
             };
             if let Some(operand_expr) = operand {
                 let first_operand_expr = self.visit_expr(operand_expr)?;
@@ -1156,24 +1150,6 @@ pub(crate) fn adjust_one_indexed_param(idx: Expr, null_if_zero: bool) -> Expr {
     }
 }
 
-fn resolve_column<'a>(
-    ctx: &'a mut SQLContext,
-    ident_root: &'a Ident,
-    name: &'a str,
-    dtype: &'a DataType,
-) -> PolarsResult<(Expr, Option<&'a DataType>)> {
-    let resolved = ctx.resolve_name(&ident_root.value, name);
-    let resolved = resolved.as_str();
-    Ok((
-        if name != resolved {
-            col(resolved).alias(name)
-        } else {
-            col(name)
-        },
-        Some(dtype),
-    ))
-}
-
 pub(crate) fn resolve_compound_identifier(
     ctx: &mut SQLContext,
     idents: &[Ident],
@@ -1200,11 +1176,20 @@ pub(crate) fn resolve_compound_identifier(
         let name = &remaining_idents.next().unwrap().value;
         if lf.is_some() && name == "*" {
             return Ok(schema
-                .iter_names_and_dtypes()
-                .map(|(name, dtype)| resolve_column(ctx, ident_root, name, dtype).unwrap().0)
+                .iter_names()
+                .map(|name| col(name.clone()))
                 .collect::<Vec<_>>());
         } else if let Some((_, name, dtype)) = schema.get_full(name) {
-            resolve_column(ctx, ident_root, name, dtype)
+            let resolved = ctx.resolve_name(&ident_root.value, name);
+            let resolved = resolved.as_str();
+            Ok((
+                if name != resolved {
+                    col(resolved).alias(name.clone())
+                } else {
+                    col(name.clone())
+                },
+                Some(dtype),
+            ))
         } else if lf.is_none() {
             remaining_idents = idents.iter().skip(1);
             Ok((

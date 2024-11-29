@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::dsl::function_expr::FieldsMapper;
 use crate::dsl::SpecialEq;
 use crate::map_as_slice;
-use crate::prelude::ColumnsUdf;
+use crate::prelude::SeriesUdf;
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, PartialEq, Debug, Eq, Hash)]
@@ -129,7 +129,7 @@ impl Display for RangeFunction {
     }
 }
 
-impl From<RangeFunction> for SpecialEq<Arc<dyn ColumnsUdf>> {
+impl From<RangeFunction> for SpecialEq<Arc<dyn SeriesUdf>> {
     fn from(func: RangeFunction) -> Self {
         use RangeFunction::*;
         match func {

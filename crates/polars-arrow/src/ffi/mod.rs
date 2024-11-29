@@ -8,7 +8,6 @@ mod schema;
 mod stream;
 
 pub(crate) use array::{try_from, ArrowArrayRef, InternalArrowArray};
-pub(crate) use bridge::align_to_c_data_interface;
 pub use generated::{ArrowArray, ArrowArrayStream, ArrowSchema};
 use polars_error::PolarsResult;
 pub use stream::{export_iterator, ArrowArrayStreamReader};

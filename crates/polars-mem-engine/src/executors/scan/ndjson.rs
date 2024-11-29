@@ -1,6 +1,5 @@
 use polars_core::config;
 use polars_core::utils::accumulate_dataframes_vertical;
-use polars_io::prelude::{JsonLineReader, SerReader};
 use polars_io::utils::compression::maybe_decompress_bytes;
 
 use super::*;
@@ -57,7 +56,7 @@ impl JsonExec {
             let mut df = DataFrame::empty_with_schema(schema);
             if let Some(col) = &self.file_scan_options.include_file_paths {
                 unsafe {
-                    df.with_column_unchecked(Column::new_empty(col.clone(), &DataType::String))
+                    df.with_column_unchecked(StringChunked::full_null(col.clone(), 0).into_series())
                 };
             }
             if let Some(row_index) = &self.file_scan_options.row_index {
@@ -76,7 +75,7 @@ impl JsonExec {
 
                 let row_index = self.file_scan_options.row_index.as_mut();
 
-                let memslice = match source.to_memslice_async_assume_latest(run_async) {
+                let memslice = match source.to_memslice_async_latest(run_async) {
                     Ok(memslice) => memslice,
                     Err(err) => return Some(Err(err)),
                 };
@@ -112,11 +111,9 @@ impl JsonExec {
                 if let Some(col) = &self.file_scan_options.include_file_paths {
                     let name = source.to_include_path_name();
                     unsafe {
-                        df.with_column_unchecked(Column::new_scalar(
-                            col.clone(),
-                            Scalar::new(DataType::String, AnyValue::StringOwned(name.into())),
-                            df.height(),
-                        ))
+                        df.with_column_unchecked(
+                            StringChunked::full(col.clone(), name, df.height()).into_series(),
+                        )
                     };
                 }
 

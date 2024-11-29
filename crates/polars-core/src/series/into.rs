@@ -4,8 +4,8 @@
     feature = "dtype-duration",
     feature = "dtype-time"
 ))]
-use polars_compute::cast::cast_default as cast;
-use polars_compute::cast::cast_unchecked;
+use arrow::compute::cast::cast_default as cast;
+use arrow::compute::cast::cast_unchecked;
 
 use crate::prelude::*;
 
@@ -44,13 +44,7 @@ impl Series {
                         s.to_arrow(0, compat_level)
                     })
                     .collect::<Vec<_>>();
-                StructArray::new(
-                    dt.to_arrow(compat_level),
-                    arr.len(),
-                    values,
-                    arr.validity().cloned(),
-                )
-                .boxed()
+                StructArray::new(dt.to_arrow(compat_level), values, arr.validity().cloned()).boxed()
             },
             // special list branch to
             // make sure that we recursively apply all logical types.
@@ -83,34 +77,6 @@ impl Series {
                     new_values,
                     arr.validity().cloned(),
                 );
-                Box::new(arr)
-            },
-            #[cfg(feature = "dtype-array")]
-            DataType::Array(inner, width) => {
-                let ca = self.array().unwrap();
-                let arr = ca.chunks[chunk_idx].clone();
-                let arr = arr.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
-
-                let new_values = if let DataType::Null = &**inner {
-                    arr.values().clone()
-                } else {
-                    let s = unsafe {
-                        Series::from_chunks_and_dtype_unchecked(
-                            PlSmallStr::EMPTY,
-                            vec![arr.values().clone()],
-                            &inner.to_physical(),
-                        )
-                        .cast_unchecked(inner)
-                        .unwrap()
-                    };
-
-                    s.to_arrow(0, compat_level)
-                };
-
-                let dtype =
-                    FixedSizeListArray::default_datatype(inner.to_arrow(compat_level), *width);
-                let arr =
-                    FixedSizeListArray::new(dtype, arr.len(), new_values, arr.validity().cloned());
                 Box::new(arr)
             },
             #[cfg(feature = "dtype-categorical")]

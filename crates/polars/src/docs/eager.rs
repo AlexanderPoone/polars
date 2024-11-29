@@ -1,7 +1,7 @@
 //!
 //! # Polars Eager cookbook
 //!
-//! This page should serve as a cookbook to quickly get you started with most fundamental operations
+//! This page should serve a cookbook to quickly get you started with most fundamental operations
 //! executed on a [`ChunkedArray`], [`Series`] or [`DataFrame`].
 //!
 //! [`ChunkedArray`]: crate::chunked_array::ChunkedArray
@@ -23,7 +23,7 @@
 //! * [Sort](#sort)
 //! * [Joins](#joins)
 //! * [GroupBy](#group_by)
-//! * [pivot](#pivot)
+//!     - [pivot](#pivot)
 //! * [Unpivot](#unpivot)
 //! * [Explode](#explode)
 //! * [IO](#io)
@@ -37,7 +37,7 @@
 //!     - [Replace NaN with Missing](#replace-nan-with-missing)
 //!     - [Extracting data](#extracting-data)
 //!
-//! ## Creation of data structures
+//! ## Creation of Data structures
 //!
 //! ### ChunkedArray
 //!
@@ -72,9 +72,6 @@
 //! // from a chunked-array
 //! let ca = UInt32Chunked::new("foo".into(), &[Some(1), None, Some(3)]);
 //! let s = ca.into_series();
-//!
-//! // into a Column
-//! let s = s.into_column();
 //! ```
 //!
 //! ### DataFrame
@@ -91,10 +88,10 @@
 //!     "values_nulls" => [Some(1), None, Some(3)]
 //! ]?;
 //!
-//! // from a Vec<Column>
-//! let c1 = Column::new("names".into(), &["a", "b", "c"]);
-//! let c2 = Column::new("values".into(), &[Some(1), None, Some(3)]);
-//! let df = DataFrame::new(vec![c1, c2])?;
+//! // from a Vec<Series>
+//! let s1 = Series::new("names".into(), &["a", "b", "c"]);
+//! let s2 = Series::new("values".into(), &[Some(1), None, Some(3)]);
+//! let df = DataFrame::new(vec![s1, s2])?;
 //! # Ok(())
 //! # }
 //! ```
@@ -134,8 +131,8 @@
 //! # }
 //! ```
 //!
-//! Because Rust's Orphan Rule doesn't allow us to implement left side operations, we need to call
-//! such operations directly.
+//! Because Rusts Orphan Rule doesn't allow use to implement left side operations, we need to call
+//! such operation directly.
 //!
 //! ```rust
 //! # use polars::prelude::*;
@@ -148,7 +145,7 @@
 //! let subtract_one_by_s = 1.sub(&series);
 //! ```
 //!
-//! For [`ChunkedArray`] left hand side operations can be done with the [`apply_values`] method.
+//! For [`ChunkedArray`] this left hand side operations can be done with the [`apply_values`] method.
 //!
 //! [`apply_values`]: crate::chunked_array::ops::ChunkApply::apply_values
 //!
@@ -259,7 +256,7 @@
 //!
 //! // count string lengths
 //! let s = Series::new("foo".into(), &["foo", "bar", "foobar"]);
-//! unary_elementwise_values::<StringType, UInt64Type, _>(s.str()?, |str_val| str_val.len() as u64);
+//! unary_elementwise_values(s.str()?, |str_val| str_val.len() as u64);
 //!
 //! # Ok(())
 //! # }
@@ -286,7 +283,7 @@
 //!                 .zip(b.into_iter())
 //!                 .map(|(opt_a, opt_b)| match (opt_a, opt_b) {
 //!                     (Some(a), Some(b)) => Some(my_black_box_function(a, b)),
-//!                     // if either value is `None` we propagate that null
+//!                     // if any of the two value is `None` we propagate that null
 //!                     _ => None,
 //!                 })
 //!                 .collect()
@@ -357,14 +354,9 @@
 //! // ordering of the columns
 //! let descending = vec![true, false];
 //! // columns to sort by
-//! let by = [PlSmallStr::from_static("b"), PlSmallStr::from_static("a")];
+//! let by = &["b", "a"];
 //! // do the sort operation
-//! let sorted = df.sort(
-//!     by,
-//!     SortMultipleOptions::default()
-//!         .with_order_descending_multi(descending)
-//!         .with_maintain_order(true)
-//! )?;
+//! let sorted = df.sort(by, descending, true)?;
 //!
 //! // sorted:
 //!
@@ -450,14 +442,7 @@
 //!      )?;
 //!
 //! // group_by "foo" | pivot "bar" column | aggregate "N"
-//!  let pivoted = pivot::pivot(
-//!     &df,
-//!     [PlSmallStr::from_static("foo")],
-//!     Some([PlSmallStr::from_static("bar")]),
-//!     Some([PlSmallStr::from_static("N")]),
-//!     false, Some(first()),
-//!     None
-//! );
+//!  let pivoted = pivot::pivot(&df, ["foo"], ["bar"], ["N"], false, Some(first()), None);
 //!
 //! // pivoted:
 //! // +-----+------+------+------+------+------+
@@ -489,10 +474,7 @@
 //!              "D" => &[2, 4, 6]
 //!     ]?;
 //!
-//! let unpivoted = df.unpivot(
-//!     [PlSmallStr::from_static("A"), PlSmallStr::from_static("B")],
-//!     [PlSmallStr::from_static("C"), PlSmallStr::from_static("D")],
-//! ).unwrap();
+//! let unpivoted = df.unpivot(&["A", "B"], &["C", "D"]).unwrap();
 //! // unpivoted:
 //!
 //! // +-----+-----+----------+-------+
@@ -528,14 +510,14 @@
 //! let s1 = Series::new("b".into(), &[1i64, 1, 1]);
 //! let s2 = Series::new("c".into(), &[2i64, 2, 2]);
 //! // construct a new ListChunked for a slice of Series.
-//! let list = Column::new("foo".into(), &[s0, s1, s2]);
+//! let list = Series::new("foo", &[s0, s1, s2]);
 //!
 //! // construct a few more Series.
-//! let s0 = Column::new("B".into(), [1, 2, 3]);
-//! let s1 = Column::new("C".into(), [1, 1, 1]);
+//! let s0 = Series::new("B".into(), [1, 2, 3]);
+//! let s1 = Series::new("C".into(), [1, 1, 1]);
 //! let df = DataFrame::new(vec![list, s0, s1])?;
 //!
-//! let exploded = df.explode([PlSmallStr::from("foo")])?;
+//! let exploded = df.explode(["foo"])?;
 //! // exploded:
 //!
 //! // +-----+-----+-----+
@@ -575,8 +557,10 @@
 //!
 //! # fn example(df: &DataFrame) -> PolarsResult<()> {
 //! // read from path
-//! let mut file = std::fs::File::open("iris.csv")?;
-//! let df = CsvReader::new(file).finish()?;
+//! let df = CsvReader::from_path("iris_csv")?
+//!             .infer_schema(None)
+//!             .has_header(true)
+//!             .finish()?;
 //! # Ok(())
 //! # }
 //! ```
@@ -697,8 +681,9 @@
 //!
 //! ## Extracting data
 //!
-//! To iterate over the values of a [`Series`], or to convert the [`Series`] into another structure
-//! such as a [`Vec<T>`], we must first downcast to a data type aware [`ChunkedArray<T>`].
+//! To be able to extract data out of [`Series`], either by iterating over them or converting them
+//! to other datatypes like a [`Vec<T>`], we first need to downcast them to a [`ChunkedArray<T>`]. This
+//! is needed because we don't know the data type that is hold by the [`Series`].
 //!
 //! [`ChunkedArray<T>`]: crate::chunked_array::ChunkedArray
 //!

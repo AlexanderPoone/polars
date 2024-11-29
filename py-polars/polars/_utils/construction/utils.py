@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import sys
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Callable, get_type_hints
+from typing import TYPE_CHECKING, Any, Callable, Sequence, get_type_hints
 
 from polars.dependencies import _check_for_pydantic, pydantic
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     import pandas as pd
 
 PANDAS_SIMPLE_NUMPY_DTYPES = {
@@ -65,11 +63,6 @@ def is_namedtuple(cls: Any, *, annotated: bool = False) -> bool:
 def is_pydantic_model(value: Any) -> bool:
     """Check whether value derives from a pydantic.BaseModel."""
     return _check_for_pydantic(value) and isinstance(value, pydantic.BaseModel)
-
-
-def is_sqlalchemy(value: Any) -> bool:
-    """Check whether value is an instance of a SQLAlchemy object."""
-    return getattr(value, "__module__", "").startswith("sqlalchemy.")
 
 
 def get_first_non_none(values: Sequence[Any | None]) -> Any:

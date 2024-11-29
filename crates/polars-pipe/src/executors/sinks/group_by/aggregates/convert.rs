@@ -135,7 +135,7 @@ pub(crate) fn convert_to_hash_agg<F>(
     to_physical: &F,
 ) -> (DataType, Arc<dyn PhysicalPipedExpr>, AggregateFunction)
 where
-    F: Fn(&ExprIR, &Arena<AExpr>, &SchemaRef) -> PolarsResult<Arc<dyn PhysicalPipedExpr>>,
+    F: Fn(&ExprIR, &Arena<AExpr>, Option<&SchemaRef>) -> PolarsResult<Arc<dyn PhysicalPipedExpr>>,
 {
     match expr_arena.get(node) {
         AExpr::Alias(input, _) => convert_to_hash_agg(*input, expr_arena, schema, to_physical),
@@ -146,9 +146,12 @@ where
         ),
         AExpr::Agg(agg) => match agg {
             IRAggExpr::Min { input, .. } => {
-                let phys_expr =
-                    to_physical(&ExprIR::from_node(*input, expr_arena), expr_arena, schema)
-                        .unwrap();
+                let phys_expr = to_physical(
+                    &ExprIR::from_node(*input, expr_arena),
+                    expr_arena,
+                    Some(schema),
+                )
+                .unwrap();
                 let logical_dtype = phys_expr.field(schema).unwrap().dtype;
 
                 let agg_fn = match logical_dtype.to_physical() {
@@ -167,9 +170,12 @@ where
                 (logical_dtype, phys_expr, agg_fn)
             },
             IRAggExpr::Max { input, .. } => {
-                let phys_expr =
-                    to_physical(&ExprIR::from_node(*input, expr_arena), expr_arena, schema)
-                        .unwrap();
+                let phys_expr = to_physical(
+                    &ExprIR::from_node(*input, expr_arena),
+                    expr_arena,
+                    Some(schema),
+                )
+                .unwrap();
                 let logical_dtype = phys_expr.field(schema).unwrap().dtype;
 
                 let agg_fn = match logical_dtype.to_physical() {
@@ -188,9 +194,12 @@ where
                 (logical_dtype, phys_expr, agg_fn)
             },
             IRAggExpr::Sum(input) => {
-                let phys_expr =
-                    to_physical(&ExprIR::from_node(*input, expr_arena), expr_arena, schema)
-                        .unwrap();
+                let phys_expr = to_physical(
+                    &ExprIR::from_node(*input, expr_arena),
+                    expr_arena,
+                    Some(schema),
+                )
+                .unwrap();
                 let logical_dtype = phys_expr.field(schema).unwrap().dtype;
 
                 #[cfg(feature = "dtype-categorical")]
@@ -208,7 +217,7 @@ where
                 let agg_fn = match logical_dtype.to_physical() {
                     // Boolean is aggregated as the IDX type.
                     DataType::Boolean => {
-                        if size_of::<IdxSize>() == 4 {
+                        if std::mem::size_of::<IdxSize>() == 4 {
                             AggregateFunction::SumU32(SumAgg::<u32>::new())
                         } else {
                             AggregateFunction::SumU64(SumAgg::<u64>::new())
@@ -231,9 +240,12 @@ where
                 (logical_dtype, phys_expr, agg_fn)
             },
             IRAggExpr::Mean(input) => {
-                let phys_expr =
-                    to_physical(&ExprIR::from_node(*input, expr_arena), expr_arena, schema)
-                        .unwrap();
+                let phys_expr = to_physical(
+                    &ExprIR::from_node(*input, expr_arena),
+                    expr_arena,
+                    Some(schema),
+                )
+                .unwrap();
 
                 let logical_dtype = phys_expr.field(schema).unwrap().dtype;
                 #[cfg(feature = "dtype-categorical")]
@@ -258,9 +270,12 @@ where
                 (logical_dtype, phys_expr, agg_fn)
             },
             IRAggExpr::First(input) => {
-                let phys_expr =
-                    to_physical(&ExprIR::from_node(*input, expr_arena), expr_arena, schema)
-                        .unwrap();
+                let phys_expr = to_physical(
+                    &ExprIR::from_node(*input, expr_arena),
+                    expr_arena,
+                    Some(schema),
+                )
+                .unwrap();
                 let logical_dtype = phys_expr.field(schema).unwrap().dtype;
                 (
                     logical_dtype.clone(),
@@ -269,9 +284,12 @@ where
                 )
             },
             IRAggExpr::Last(input) => {
-                let phys_expr =
-                    to_physical(&ExprIR::from_node(*input, expr_arena), expr_arena, schema)
-                        .unwrap();
+                let phys_expr = to_physical(
+                    &ExprIR::from_node(*input, expr_arena),
+                    expr_arena,
+                    Some(schema),
+                )
+                .unwrap();
                 let logical_dtype = phys_expr.field(schema).unwrap().dtype;
                 (
                     logical_dtype.clone(),
@@ -280,9 +298,12 @@ where
                 )
             },
             IRAggExpr::Count(input, _) => {
-                let phys_expr =
-                    to_physical(&ExprIR::from_node(*input, expr_arena), expr_arena, schema)
-                        .unwrap();
+                let phys_expr = to_physical(
+                    &ExprIR::from_node(*input, expr_arena),
+                    expr_arena,
+                    Some(schema),
+                )
+                .unwrap();
                 let logical_dtype = phys_expr.field(schema).unwrap().dtype;
                 (
                     logical_dtype,

@@ -12,9 +12,9 @@ use simd_json::{BorrowedValue as Value, KnownKey, StaticNode};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BufferKey<'a>(pub(crate) KnownKey<'a>);
-impl Eq for BufferKey<'_> {}
+impl<'a> Eq for BufferKey<'a> {}
 
-impl Hash for BufferKey<'_> {
+impl<'a> Hash for BufferKey<'a> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.key().hash(state)
     }

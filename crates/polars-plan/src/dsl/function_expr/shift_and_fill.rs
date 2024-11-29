@@ -16,7 +16,7 @@ where
     feature = "dtype-struct",
     feature = "dtype-categorical"
 ))]
-fn shift_and_fill_with_mask(s: &Column, n: i64, fill_value: &Column) -> PolarsResult<Column> {
+fn shift_and_fill_with_mask(s: &Series, n: i64, fill_value: &Series) -> PolarsResult<Series> {
     use polars_core::export::arrow::array::BooleanArray;
     use polars_core::export::arrow::bitmap::MutableBitmap;
 
@@ -40,7 +40,7 @@ fn shift_and_fill_with_mask(s: &Column, n: i64, fill_value: &Column) -> PolarsRe
     s.shift(n).zip_with_same_type(&mask, fill_value)
 }
 
-pub(super) fn shift_and_fill(args: &[Column]) -> PolarsResult<Column> {
+pub(super) fn shift_and_fill(args: &[Series]) -> PolarsResult<Series> {
     let s = &args[0];
     let n_s = &args[1];
 
@@ -66,17 +66,16 @@ pub(super) fn shift_and_fill(args: &[Column]) -> PolarsResult<Column> {
                     AnyValue::Null => None,
                     v => polars_bail!(ComputeError: "fill value '{}' is not supported", v),
                 };
-                ca.shift_and_fill(n, fill_value).into_column().cast(logical)
+                ca.shift_and_fill(n, fill_value).into_series().cast(logical)
             },
             String => {
                 let ca = s.str()?;
                 let fill_value = match fill_value {
                     AnyValue::String(v) => Some(v),
-                    AnyValue::StringOwned(ref v) => Some(v.as_str()),
                     AnyValue::Null => None,
                     v => polars_bail!(ComputeError: "fill value '{}' is not supported", v),
                 };
-                ca.shift_and_fill(n, fill_value).into_column().cast(logical)
+                ca.shift_and_fill(n, fill_value).into_series().cast(logical)
             },
             List(_) => {
                 let ca = s.list()?;
@@ -86,7 +85,7 @@ pub(super) fn shift_and_fill(args: &[Column]) -> PolarsResult<Column> {
                     v => polars_bail!(ComputeError: "fill value '{}' is not supported", v),
                 };
                 ca.shift_and_fill(n, fill_value.as_ref())
-                    .into_column()
+                    .into_series()
                     .cast(logical)
             },
             #[cfg(feature = "object")]
@@ -98,7 +97,7 @@ pub(super) fn shift_and_fill(args: &[Column]) -> PolarsResult<Column> {
             dt if dt.is_numeric() || dt.is_logical() => {
                 macro_rules! dispatch {
                     ($ca:expr, $n:expr, $fill_value:expr) => {{
-                        shift_and_fill_numeric($ca, $n, $fill_value).into_column()
+                        shift_and_fill_numeric($ca, $n, $fill_value).into_series()
                     }};
                 }
                 let out = downcast_as_macro_arg_physical!(physical, dispatch, n, fill_value);
@@ -107,11 +106,11 @@ pub(super) fn shift_and_fill(args: &[Column]) -> PolarsResult<Column> {
             dt => polars_bail!(opq = shift_and_fill, dt),
         }
     } else {
-        Ok(Column::full_null(s.name().clone(), s.len(), s.dtype()))
+        Ok(Series::full_null(s.name().clone(), s.len(), s.dtype()))
     }
 }
 
-pub fn shift(args: &[Column]) -> PolarsResult<Column> {
+pub fn shift(args: &[Series]) -> PolarsResult<Series> {
     let s = &args[0];
     let n_s = &args[1];
     polars_ensure!(
@@ -124,6 +123,6 @@ pub fn shift(args: &[Column]) -> PolarsResult<Column> {
 
     match n.get(0) {
         Some(n) => Ok(s.shift(n)),
-        None => Ok(Column::full_null(s.name().clone(), s.len(), s.dtype())),
+        None => Ok(Series::full_null(s.name().clone(), s.len(), s.dtype())),
     }
 }

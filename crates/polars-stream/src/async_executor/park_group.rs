@@ -149,7 +149,7 @@ pub struct ParkAttempt<'a> {
     worker: &'a mut ParkGroupWorker,
 }
 
-impl ParkAttempt<'_> {
+impl<'a> ParkAttempt<'a> {
     /// Actually park this worker.
     ///
     /// If there were calls to unpark between calling prepare_park() and park(),

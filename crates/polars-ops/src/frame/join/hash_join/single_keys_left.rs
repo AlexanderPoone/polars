@@ -112,8 +112,6 @@ pub(super) fn hash_join_tuples_left<T, I>(
     chunk_mapping_right: Option<&[ChunkId]>,
     validate: JoinValidation,
     join_nulls: bool,
-    // We should know the number of nulls to avoid extra calculation
-    build_null_count: usize,
 ) -> PolarsResult<LeftJoinIds>
 where
     I: IntoIterator<Item = T>,
@@ -125,10 +123,7 @@ where
     let build = build.into_iter().map(|i| i.into_iter()).collect::<Vec<_>>();
     // first we hash one relation
     let hash_tbls = if validate.needs_checks() {
-        let mut expected_size = build.iter().map(|v| v.size_hint().1.unwrap()).sum();
-        if !join_nulls {
-            expected_size -= build_null_count;
-        }
+        let expected_size = build.iter().map(|v| v.size_hint().1.unwrap()).sum();
         let hash_tbls = build_tables(build, join_nulls);
         let build_size = hash_tbls.iter().map(|m| m.len()).sum();
         validate.validate_build(build_size, expected_size, false)?;

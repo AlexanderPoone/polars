@@ -6,45 +6,36 @@ use crate::PySeries;
 
 #[pymethods]
 impl PySeries {
-    fn eq(&self, py: Python, rhs: &PySeries) -> PyResult<Self> {
-        let s = py
-            .allow_threads(|| self.series.equal(&rhs.series))
+    fn eq(&self, rhs: &PySeries) -> PyResult<Self> {
+        let s = self.series.equal(&rhs.series).map_err(PyPolarsErr::from)?;
+        Ok(s.into_series().into())
+    }
+
+    fn neq(&self, rhs: &PySeries) -> PyResult<Self> {
+        let s = self
+            .series
+            .not_equal(&rhs.series)
             .map_err(PyPolarsErr::from)?;
         Ok(s.into_series().into())
     }
 
-    fn neq(&self, py: Python, rhs: &PySeries) -> PyResult<Self> {
-        let s = py
-            .allow_threads(|| self.series.not_equal(&rhs.series))
-            .map_err(PyPolarsErr::from)?;
+    fn gt(&self, rhs: &PySeries) -> PyResult<Self> {
+        let s = self.series.gt(&rhs.series).map_err(PyPolarsErr::from)?;
         Ok(s.into_series().into())
     }
 
-    fn gt(&self, py: Python, rhs: &PySeries) -> PyResult<Self> {
-        let s = py
-            .allow_threads(|| self.series.gt(&rhs.series))
-            .map_err(PyPolarsErr::from)?;
+    fn gt_eq(&self, rhs: &PySeries) -> PyResult<Self> {
+        let s = self.series.gt_eq(&rhs.series).map_err(PyPolarsErr::from)?;
         Ok(s.into_series().into())
     }
 
-    fn gt_eq(&self, py: Python, rhs: &PySeries) -> PyResult<Self> {
-        let s = py
-            .allow_threads(|| self.series.gt_eq(&rhs.series))
-            .map_err(PyPolarsErr::from)?;
+    fn lt(&self, rhs: &PySeries) -> PyResult<Self> {
+        let s = self.series.lt(&rhs.series).map_err(PyPolarsErr::from)?;
         Ok(s.into_series().into())
     }
 
-    fn lt(&self, py: Python, rhs: &PySeries) -> PyResult<Self> {
-        let s = py
-            .allow_threads(|| self.series.lt(&rhs.series))
-            .map_err(PyPolarsErr::from)?;
-        Ok(s.into_series().into())
-    }
-
-    fn lt_eq(&self, py: Python, rhs: &PySeries) -> PyResult<Self> {
-        let s = py
-            .allow_threads(|| self.series.lt_eq(&rhs.series))
-            .map_err(PyPolarsErr::from)?;
+    fn lt_eq(&self, rhs: &PySeries) -> PyResult<Self> {
+        let s = self.series.lt_eq(&rhs.series).map_err(PyPolarsErr::from)?;
         Ok(s.into_series().into())
     }
 }
@@ -53,10 +44,8 @@ macro_rules! impl_eq_num {
     ($name:ident, $type:ty) => {
         #[pymethods]
         impl PySeries {
-            fn $name(&self, py: Python, rhs: $type) -> PyResult<Self> {
-                let s = py
-                    .allow_threads(|| self.series.equal(rhs))
-                    .map_err(PyPolarsErr::from)?;
+            fn $name(&self, rhs: $type) -> PyResult<Self> {
+                let s = self.series.equal(rhs).map_err(PyPolarsErr::from)?;
                 Ok(s.into_series().into())
             }
         }
@@ -80,10 +69,8 @@ macro_rules! impl_neq_num {
         #[allow(clippy::nonstandard_macro_braces)]
         #[pymethods]
         impl PySeries {
-            fn $name(&self, py: Python, rhs: $type) -> PyResult<Self> {
-                let s = py
-                    .allow_threads(|| self.series.not_equal(rhs))
-                    .map_err(PyPolarsErr::from)?;
+            fn $name(&self, rhs: $type) -> PyResult<Self> {
+                let s = self.series.not_equal(rhs).map_err(PyPolarsErr::from)?;
                 Ok(s.into_series().into())
             }
         }
@@ -106,10 +93,8 @@ macro_rules! impl_gt_num {
     ($name:ident, $type:ty) => {
         #[pymethods]
         impl PySeries {
-            fn $name(&self, py: Python, rhs: $type) -> PyResult<Self> {
-                let s = py
-                    .allow_threads(|| self.series.gt(rhs))
-                    .map_err(PyPolarsErr::from)?;
+            fn $name(&self, rhs: $type) -> PyResult<Self> {
+                let s = self.series.gt(rhs).map_err(PyPolarsErr::from)?;
                 Ok(s.into_series().into())
             }
         }
@@ -132,10 +117,8 @@ macro_rules! impl_gt_eq_num {
     ($name:ident, $type:ty) => {
         #[pymethods]
         impl PySeries {
-            fn $name(&self, py: Python, rhs: $type) -> PyResult<Self> {
-                let s = py
-                    .allow_threads(|| self.series.gt_eq(rhs))
-                    .map_err(PyPolarsErr::from)?;
+            fn $name(&self, rhs: $type) -> PyResult<Self> {
+                let s = self.series.gt_eq(rhs).map_err(PyPolarsErr::from)?;
                 Ok(s.into_series().into())
             }
         }
@@ -159,10 +142,8 @@ macro_rules! impl_lt_num {
         #[allow(clippy::nonstandard_macro_braces)]
         #[pymethods]
         impl PySeries {
-            fn $name(&self, py: Python, rhs: $type) -> PyResult<Self> {
-                let s = py
-                    .allow_threads(|| self.series.lt(rhs))
-                    .map_err(PyPolarsErr::from)?;
+            fn $name(&self, rhs: $type) -> PyResult<Self> {
+                let s = self.series.lt(rhs).map_err(PyPolarsErr::from)?;
                 Ok(s.into_series().into())
             }
         }
@@ -185,10 +166,8 @@ macro_rules! impl_lt_eq_num {
     ($name:ident, $type:ty) => {
         #[pymethods]
         impl PySeries {
-            fn $name(&self, py: Python, rhs: $type) -> PyResult<Self> {
-                let s = py
-                    .allow_threads(|| self.series.lt_eq(rhs))
-                    .map_err(PyPolarsErr::from)?;
+            fn $name(&self, rhs: $type) -> PyResult<Self> {
+                let s = self.series.lt_eq(rhs).map_err(PyPolarsErr::from)?;
                 Ok(s.into_series().into())
             }
         }
@@ -247,14 +226,12 @@ macro_rules! impl_decimal {
     ($name:ident, $method:ident) => {
         #[pymethods]
         impl PySeries {
-            fn $name(&self, py: Python, rhs: PyDecimal) -> PyResult<Self> {
+            fn $name(&self, rhs: PyDecimal) -> PyResult<Self> {
                 let rhs = Series::new(
                     PlSmallStr::from_static("decimal"),
                     &[AnyValue::Decimal(rhs.0, rhs.1)],
                 );
-                let s = py
-                    .allow_threads(|| self.series.$method(&rhs))
-                    .map_err(PyPolarsErr::from)?;
+                let s = self.series.$method(&rhs).map_err(PyPolarsErr::from)?;
                 Ok(s.into_series().into())
             }
         }

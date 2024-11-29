@@ -1,7 +1,6 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use polars_core::prelude::PlHashMap;
 use polars_error::PolarsResult;
 use polars_utils::_limit_path_len_io_err;
 use polars_utils::mmap::MemSlice;
@@ -17,11 +16,7 @@ pub trait ByteSource: Send + Sync {
     /// # Panics
     /// Panics if `range` is not in bounds.
     async fn get_range(&self, range: Range<usize>) -> PolarsResult<MemSlice>;
-    /// Note: This will mutably sort ranges for coalescing.
-    async fn get_ranges(
-        &self,
-        ranges: &mut [Range<usize>],
-    ) -> PolarsResult<PlHashMap<usize, MemSlice>>;
+    async fn get_ranges(&self, ranges: &[Range<usize>]) -> PolarsResult<Vec<MemSlice>>;
 }
 
 /// Byte source backed by a `MemSlice`, which can potentially be memory-mapped.
@@ -54,14 +49,11 @@ impl ByteSource for MemSliceByteSource {
         Ok(out)
     }
 
-    async fn get_ranges(
-        &self,
-        ranges: &mut [Range<usize>],
-    ) -> PolarsResult<PlHashMap<usize, MemSlice>> {
+    async fn get_ranges(&self, ranges: &[Range<usize>]) -> PolarsResult<Vec<MemSlice>> {
         Ok(ranges
             .iter()
-            .map(|x| (x.start, self.0.slice(x.clone())))
-            .collect())
+            .map(|x| self.0.slice(x.clone()))
+            .collect::<Vec<_>>())
     }
 }
 
@@ -96,11 +88,9 @@ impl ByteSource for ObjectStoreByteSource {
         Ok(mem_slice)
     }
 
-    async fn get_ranges(
-        &self,
-        ranges: &mut [Range<usize>],
-    ) -> PolarsResult<PlHashMap<usize, MemSlice>> {
-        self.store.get_ranges_sort(&self.path, ranges).await
+    async fn get_ranges(&self, ranges: &[Range<usize>]) -> PolarsResult<Vec<MemSlice>> {
+        let ranges = self.store.get_ranges(&self.path, ranges).await?;
+        Ok(ranges.into_iter().map(MemSlice::from_bytes).collect())
     }
 }
 
@@ -140,10 +130,7 @@ impl ByteSource for DynByteSource {
         }
     }
 
-    async fn get_ranges(
-        &self,
-        ranges: &mut [Range<usize>],
-    ) -> PolarsResult<PlHashMap<usize, MemSlice>> {
+    async fn get_ranges(&self, ranges: &[Range<usize>]) -> PolarsResult<Vec<MemSlice>> {
         match self {
             Self::MemSlice(v) => v.get_ranges(ranges).await,
             Self::Cloud(v) => v.get_ranges(ranges).await,

@@ -1,4 +1,3 @@
-use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -7,18 +6,17 @@ use polars_core::error::{feature_gated, PolarsResult};
 use polars_io::cloud::CloudOptions;
 #[cfg(feature = "cloud")]
 use polars_io::utils::byte_source::{DynByteSource, DynByteSourceBuilder};
-use polars_io::{expand_paths, expand_paths_hive, expanded_from_single_directory};
 use polars_utils::mmap::MemSlice;
 use polars_utils::pl_str::PlSmallStr;
 
-use super::FileScanOptions;
+use super::DslScanSources;
 
 /// Set of sources to scan from
 ///
-/// This can either be a list of paths to files, opened files or in-memory buffers. Mixing of
+/// This is can either be a list of paths to files, opened files or in-memory buffers. Mixing of
 /// buffers is not currently possible.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum ScanSources {
     Paths(Arc<[PathBuf]>),
 
@@ -26,16 +24,6 @@ pub enum ScanSources {
     Files(Arc<[File]>),
     #[cfg_attr(feature = "serde", serde(skip))]
     Buffers(Arc<[bytes::Bytes]>),
-}
-
-impl Debug for ScanSources {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Paths(p) => write!(f, "paths: {:?}", p.as_ref()),
-            Self::Files(p) => write!(f, "files: {} files", p.len()),
-            Self::Buffers(b) => write!(f, "buffers: {} in-memory-buffers", b.len()),
-        }
-    }
 }
 
 /// A reference to a single item in [`ScanSources`]
@@ -54,9 +42,7 @@ pub struct ScanSourceIter<'a> {
 
 impl Default for ScanSources {
     fn default() -> Self {
-        // We need to use `Paths` here to avoid erroring when doing hive-partitioned scans of empty
-        // file lists.
-        Self::Paths(Arc::default())
+        Self::Buffers(Arc::default())
     }
 }
 
@@ -93,55 +79,17 @@ impl PartialEq for ScanSources {
 impl Eq for ScanSources {}
 
 impl ScanSources {
-    pub fn expand_paths(
-        &self,
-        file_options: &FileScanOptions,
-        #[allow(unused_variables)] cloud_options: Option<&CloudOptions>,
-    ) -> PolarsResult<Self> {
-        match self {
-            Self::Paths(paths) => Ok(Self::Paths(expand_paths(
-                paths,
-                file_options.glob,
-                cloud_options,
-            )?)),
-            v => Ok(v.clone()),
-        }
-    }
-
-    /// This will update `file_options.hive_options.enabled` to `true` if the existing value is `None`
-    /// and the paths are expanded from a single directory. Otherwise the existing value is maintained.
-    #[cfg(any(feature = "ipc", feature = "parquet"))]
-    pub fn expand_paths_with_hive_update(
-        &self,
-        file_options: &mut FileScanOptions,
-        #[allow(unused_variables)] cloud_options: Option<&CloudOptions>,
-    ) -> PolarsResult<Self> {
-        match self {
-            Self::Paths(paths) => {
-                let (expanded_paths, hive_start_idx) = expand_paths_hive(
-                    paths,
-                    file_options.glob,
-                    cloud_options,
-                    file_options.hive_options.enabled.unwrap_or(false),
-                )?;
-
-                if file_options.hive_options.enabled.is_none()
-                    && expanded_from_single_directory(paths, expanded_paths.as_ref())
-                {
-                    file_options.hive_options.enabled = Some(true);
-                }
-                file_options.hive_options.hive_start_idx = hive_start_idx;
-
-                Ok(Self::Paths(expanded_paths))
-            },
-            v => Ok(v.clone()),
-        }
-    }
-
     pub fn iter(&self) -> ScanSourceIter {
         ScanSourceIter {
             sources: self,
             offset: 0,
+        }
+    }
+
+    pub fn to_dsl(self, is_expanded: bool) -> DslScanSources {
+        DslScanSources {
+            sources: self,
+            is_expanded,
         }
     }
 
@@ -230,7 +178,7 @@ impl ScanSources {
     }
 }
 
-impl ScanSourceRef<'_> {
+impl<'a> ScanSourceRef<'a> {
     /// Get the name for `include_paths`
     pub fn to_include_path_name(&self) -> &str {
         match self {
@@ -245,7 +193,7 @@ impl ScanSourceRef<'_> {
         self.to_memslice_possibly_async(false, None, 0)
     }
 
-    pub fn to_memslice_async_assume_latest(&self, run_async: bool) -> PolarsResult<MemSlice> {
+    pub fn to_memslice_async_latest(&self, run_async: bool) -> PolarsResult<MemSlice> {
         match self {
             ScanSourceRef::Path(path) => {
                 let file = if run_async {
@@ -331,4 +279,4 @@ impl<'a> Iterator for ScanSourceIter<'a> {
     }
 }
 
-impl ExactSizeIterator for ScanSourceIter<'_> {}
+impl<'a> ExactSizeIterator for ScanSourceIter<'a> {}

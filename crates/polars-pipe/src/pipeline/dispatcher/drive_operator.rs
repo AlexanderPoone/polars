@@ -106,13 +106,7 @@ pub(super) fn push_operators_single_thread(
                 let op = op.get_mut();
                 match op.execute(ec, &chunk)? {
                     OperatorResult::Finished(chunk) => {
-                        let flag = op.must_flush();
-                        let _ = must_flush.compare_exchange(
-                            false,
-                            flag,
-                            Ordering::Relaxed,
-                            Ordering::Relaxed,
-                        );
+                        must_flush.store(op.must_flush(), Ordering::Relaxed);
                         in_process.push((op_i + 1, chunk))
                     },
                     OperatorResult::HaveMoreOutPut(output_chunk) => {

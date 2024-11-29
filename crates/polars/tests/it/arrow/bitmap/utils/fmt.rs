@@ -2,7 +2,7 @@ use arrow::bitmap::utils::fmt;
 
 struct A<'a>(&'a [u8], usize, usize);
 
-impl std::fmt::Debug for A<'_> {
+impl<'a> std::fmt::Debug for A<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         fmt(self.0, self.1, self.2, f)
     }

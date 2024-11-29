@@ -413,13 +413,13 @@ impl<'a> ExprIRDisplay<'a> {
     }
 }
 
-impl Display for IRDisplay<'_> {
+impl<'a> Display for IRDisplay<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self._format(f, 0)
     }
 }
 
-impl<T: AsExpr> Display for ExprIRSliceDisplay<'_, T> {
+impl<'a, T: AsExpr> Display for ExprIRSliceDisplay<'a, T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         // Display items in slice delimited by a comma
 
@@ -452,13 +452,7 @@ impl<T: AsExpr> Display for ExprIRSliceDisplay<'_, T> {
     }
 }
 
-impl<T: AsExpr> fmt::Debug for ExprIRSliceDisplay<'_, T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(self, f)
-    }
-}
-
-impl Display for ExprIRDisplay<'_> {
+impl<'a> Display for ExprIRDisplay<'a> {
     #[recursive]
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let root = self.expr_arena.get(self.node);
@@ -593,16 +587,6 @@ impl Display for ExprIRDisplay<'_> {
                     Var(expr, _) => write!(f, "{}.var()", self.with_root(expr)),
                     Std(expr, _) => write!(f, "{}.std()", self.with_root(expr)),
                     Quantile { expr, .. } => write!(f, "{}.quantile()", self.with_root(expr)),
-                    #[cfg(feature = "bitwise")]
-                    Bitwise(expr, t) => {
-                        let t = match t {
-                            BitwiseAggFunction::And => "and",
-                            BitwiseAggFunction::Or => "or",
-                            BitwiseAggFunction::Xor => "xor",
-                        };
-
-                        write!(f, "{}.bitwise.{t}()", self.with_root(expr))
-                    },
                 }
             },
             Cast {
@@ -670,12 +654,6 @@ impl Display for ExprIRDisplay<'_> {
         }
 
         Ok(())
-    }
-}
-
-impl fmt::Debug for ExprIRDisplay<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        Display::fmt(self, f)
     }
 }
 

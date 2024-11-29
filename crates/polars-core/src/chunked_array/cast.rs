@@ -1,6 +1,6 @@
 //! Implementations of the ChunkCast Trait.
 
-use polars_compute::cast::CastOptionsImpl;
+use arrow::compute::cast::CastOptionsImpl;
 #[cfg(feature = "serde-lazy")]
 use serde::{Deserialize, Serialize};
 
@@ -55,7 +55,7 @@ pub(crate) fn cast_chunks(
     chunks
         .iter()
         .map(|arr| {
-            let out = polars_compute::cast::cast(arr.as_ref(), &arrow_dtype, options);
+            let out = arrow::compute::cast::cast(arr.as_ref(), &arrow_dtype, options);
             if check_nulls {
                 out.and_then(|new| {
                     polars_ensure!(arr.null_count() == new.null_count(), ComputeError: "strict cast failed");
@@ -125,7 +125,7 @@ fn cast_single_to_struct(
         new_fields.push(Series::full_null(fld.name.clone(), length, &fld.dtype));
     }
 
-    StructChunked::from_series(name, length, new_fields.iter()).map(|ca| ca.into_series())
+    StructChunked::from_series(name, &new_fields).map(|ca| ca.into_series())
 }
 
 impl<T> ChunkedArray<T>
@@ -206,9 +206,10 @@ where
                 // - remain signed
                 // - unsigned -> signed
                 // this may still fail with overflow?
+                let dtype = self.dtype();
+
                 let to_signed = dtype.is_signed_integer();
-                let unsigned2unsigned =
-                    self.dtype().is_unsigned_integer() && dtype.is_unsigned_integer();
+                let unsigned2unsigned = dtype.is_unsigned_integer() && dtype.is_unsigned_integer();
                 let allowed = to_signed || unsigned2unsigned;
 
                 if (allowed)
@@ -298,7 +299,7 @@ impl ChunkCast for StringChunked {
             DataType::Decimal(precision, scale) => match (precision, scale) {
                 (precision, Some(scale)) => {
                     let chunks = self.downcast_iter().map(|arr| {
-                        polars_compute::cast::binview_to_decimal(
+                        arrow::compute::cast::binview_to_decimal(
                             &arr.to_binview(),
                             *precision,
                             *scale,
@@ -663,7 +664,7 @@ fn cast_fixed_size_list(
     let new_values = new_inner.array_ref(0).clone();
 
     let dtype = FixedSizeListArray::default_datatype(new_values.dtype().clone(), ca.width());
-    let new_arr = FixedSizeListArray::new(dtype, ca.len(), new_values, arr.validity().cloned());
+    let new_arr = FixedSizeListArray::new(dtype, new_values, arr.validity().cloned());
     Ok((Box::new(new_arr), inner_dtype))
 }
 

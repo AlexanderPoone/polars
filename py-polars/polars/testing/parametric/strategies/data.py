@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import decimal
-from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Mapping, Sequence
 
 import hypothesis.strategies as st
 from hypothesis.errors import InvalidArgument
@@ -61,7 +60,6 @@ from polars.testing.parametric.strategies.dtype import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
     from datetime import date, time
 
     from hypothesis.strategies import SearchStrategy

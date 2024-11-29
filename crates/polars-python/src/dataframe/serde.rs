@@ -4,7 +4,6 @@ use std::ops::Deref;
 use polars::prelude::*;
 use polars_io::mmap::ReaderBytes;
 use pyo3::prelude::*;
-use pyo3::pybacked::PyBackedBytes;
 use pyo3::types::PyBytes;
 
 use super::PyDataFrame;
@@ -26,11 +25,11 @@ impl PyDataFrame {
     }
 
     #[cfg(feature = "ipc_streaming")]
-    fn __setstate__(&mut self, state: &Bound<PyAny>) -> PyResult<()> {
+    fn __setstate__(&mut self, py: Python, state: PyObject) -> PyResult<()> {
         // Used in pickle/pickling
-        match state.extract::<PyBackedBytes>() {
+        match state.extract::<&PyBytes>(py) {
             Ok(s) => {
-                let c = Cursor::new(&*s);
+                let c = Cursor::new(s.as_bytes());
                 let reader = IpcStreamReader::new(c);
 
                 reader

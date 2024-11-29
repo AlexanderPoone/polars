@@ -149,7 +149,7 @@ where
         })
         .collect::<Vec<_>>();
 
-    StructChunked::from_series(ca.name().clone(), ca.len(), fields.iter())
+    StructChunked::from_series(ca.name().clone(), &fields)
 }
 
 pub fn split_helper<'a, F, I>(ca: &'a StringChunked, by: &'a StringChunked, op: F) -> ListChunked

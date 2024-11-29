@@ -1,7 +1,7 @@
 use num_traits::Bounded;
-#[cfg(feature = "dtype-struct")]
-use polars_core::chunked_array::ops::row_encode::_get_rows_encoded_ca;
 use polars_core::prelude::arity::unary_elementwise_values;
+#[cfg(feature = "dtype-struct")]
+use polars_core::prelude::sort::arg_sort_multiple::_get_rows_encoded_ca;
 use polars_core::prelude::*;
 use polars_core::series::IsSorted;
 use polars_core::with_match_physical_numeric_polars_type;
@@ -27,21 +27,20 @@ pub trait SeriesMethods: SeriesSealed {
         );
         // we need to sort here as well in case of `maintain_order` because duplicates behavior is undefined
         let groups = s.group_tuples(parallel, sort)?;
-        let values = unsafe { s.agg_first(&groups) }.into();
+        let values = unsafe { s.agg_first(&groups) };
         let counts = groups.group_count().with_name(name.clone());
 
         let counts = if normalize {
             let len = s.len() as f64;
             let counts: Float64Chunked =
                 unary_elementwise_values(&counts, |count| count as f64 / len);
-            counts.into_column()
+            counts.into_series()
         } else {
-            counts.into_column()
+            counts.into_series()
         };
 
-        let height = counts.len();
-        let cols = vec![values, counts];
-        let df = unsafe { DataFrame::new_no_checks(height, cols) };
+        let cols = vec![values, counts.into_series()];
+        let df = unsafe { DataFrame::new_no_checks(cols) };
         if sort {
             df.sort(
                 [name],
@@ -96,7 +95,7 @@ pub trait SeriesMethods: SeriesSealed {
         if matches!(s.dtype(), DataType::Struct(_)) {
             let encoded = _get_rows_encoded_ca(
                 PlSmallStr::EMPTY,
-                &[s.clone().into()],
+                &[s.clone()],
                 &[options.descending],
                 &[options.nulls_last],
             )?;

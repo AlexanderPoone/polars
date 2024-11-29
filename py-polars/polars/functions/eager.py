@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Sequence
 from functools import reduce
 from itertools import chain
-from typing import TYPE_CHECKING, get_args
+from typing import TYPE_CHECKING, Iterable, Sequence, get_args
 
 import polars._reexport as pl
 from polars import functions as F
@@ -17,8 +16,6 @@ with contextlib.suppress(ImportError):  # Module not available when building doc
     import polars.polars as plr
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     from polars import DataFrame, Expr, LazyFrame, Series
     from polars._typing import FrameType, JoinStrategy, PolarsType
 

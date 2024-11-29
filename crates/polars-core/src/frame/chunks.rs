@@ -9,12 +9,12 @@ impl TryFrom<(RecordBatch, &ArrowSchema)> for DataFrame {
     type Error = PolarsError;
 
     fn try_from(arg: (RecordBatch, &ArrowSchema)) -> PolarsResult<DataFrame> {
-        let columns: PolarsResult<Vec<Column>> = arg
+        let columns: PolarsResult<Vec<Series>> = arg
             .0
             .columns()
             .iter()
             .zip(arg.1.iter_values())
-            .map(|(arr, field)| Series::try_from((field, arr.clone())).map(Column::from))
+            .map(|(arr, field)| Series::try_from((field, arr.clone())))
             .collect();
 
         DataFrame::new(columns?)
@@ -23,18 +23,16 @@ impl TryFrom<(RecordBatch, &ArrowSchema)> for DataFrame {
 
 impl DataFrame {
     pub fn split_chunks(&mut self) -> impl Iterator<Item = DataFrame> + '_ {
-        self.align_chunks_par();
+        self.align_chunks();
 
-        (0..self.first_col_n_chunks()).map(move |i| unsafe {
+        (0..self.n_chunks()).map(move |i| unsafe {
             let columns = self
                 .get_columns()
                 .iter()
-                .map(|column| column.as_materialized_series().select_chunk(i))
-                .map(Column::from)
+                .map(|s| s.select_chunk(i))
                 .collect::<Vec<_>>();
 
-            let height = Self::infer_height(&columns);
-            DataFrame::new_no_checks(height, columns)
+            DataFrame::new_no_checks(columns)
         })
     }
 

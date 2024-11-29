@@ -30,7 +30,7 @@ class PolarsDataFrame(InterchangeDataFrame):
 
     version = 0
 
-    def __init__(self, df: DataFrame, *, allow_copy: bool = True) -> None:
+    def __init__(self, df: DataFrame, *, allow_copy: bool = True):
         self._df = df
         self._allow_copy = allow_copy
 

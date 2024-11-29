@@ -141,6 +141,5 @@ impl<T: HasPrimitiveArithmeticKernel> ArithmeticKernel for PrimitiveArray<T> {
 }
 
 mod float;
-pub mod pl_num;
 mod signed;
 mod unsigned;

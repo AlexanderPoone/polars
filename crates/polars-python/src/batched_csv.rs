@@ -23,10 +23,10 @@ impl PyBatchedCsv {
     #[staticmethod]
     #[pyo3(signature = (
         infer_schema_length, chunk_size, has_header, ignore_errors, n_rows, skip_rows,
-        projection, separator, rechunk, columns, encoding, n_threads, path, schema_overrides,
+        projection, separator, rechunk, columns, encoding, n_threads, path, overwrite_dtype,
         overwrite_dtype_slice, low_memory, comment_prefix, quote_char, null_values,
         missing_utf8_is_empty_string, try_parse_dates, skip_rows_after_header, row_index,
-        eol_char, raise_if_empty, truncate_ragged_lines, decimal_comma)
+        sample_size, eol_char, raise_if_empty, truncate_ragged_lines, decimal_comma)
     )]
     fn new(
         infer_schema_length: Option<usize>,
@@ -42,7 +42,7 @@ impl PyBatchedCsv {
         encoding: Wrap<CsvEncoding>,
         n_threads: Option<usize>,
         path: PathBuf,
-        schema_overrides: Option<Vec<(PyBackedStr, Wrap<DataType>)>>,
+        overwrite_dtype: Option<Vec<(PyBackedStr, Wrap<DataType>)>>,
         overwrite_dtype_slice: Option<Vec<Wrap<DataType>>>,
         low_memory: bool,
         comment_prefix: Option<&str>,
@@ -52,6 +52,7 @@ impl PyBatchedCsv {
         try_parse_dates: bool,
         skip_rows_after_header: usize,
         row_index: Option<(String, IdxSize)>,
+        sample_size: usize,
         eol_char: &str,
         raise_if_empty: bool,
         truncate_ragged_lines: bool,
@@ -73,7 +74,7 @@ impl PyBatchedCsv {
             None
         };
 
-        let schema_overrides = schema_overrides.map(|overwrite_dtype| {
+        let overwrite_dtype = overwrite_dtype.map(|overwrite_dtype| {
             overwrite_dtype
                 .iter()
                 .map(|(name, dtype)| {
@@ -105,9 +106,9 @@ impl PyBatchedCsv {
             .with_n_threads(n_threads)
             .with_dtype_overwrite(overwrite_dtype_slice.map(Arc::new))
             .with_low_memory(low_memory)
-            .with_schema_overwrite(schema_overrides.map(Arc::new))
             .with_skip_rows_after_header(skip_rows_after_header)
             .with_row_index(row_index)
+            .with_sample_size(sample_size)
             .with_raise_if_empty(raise_if_empty)
             .with_parse_options(
                 CsvParseOptions::default()
@@ -124,7 +125,9 @@ impl PyBatchedCsv {
             )
             .into_reader_with_file_handle(reader);
 
-        let reader = reader.batched(None).map_err(PyPolarsErr::from)?;
+        let reader = reader
+            .batched(overwrite_dtype.map(Arc::new))
+            .map_err(PyPolarsErr::from)?;
 
         Ok(PyBatchedCsv {
             reader: Mutex::new(reader),

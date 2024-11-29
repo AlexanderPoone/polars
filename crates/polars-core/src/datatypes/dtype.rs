@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 #[cfg(feature = "dtype-array")]
 use polars_utils::format_tuple;
-use polars_utils::itertools::Itertools;
 
 use super::*;
 #[cfg(feature = "object")]
@@ -116,10 +115,9 @@ impl PartialEq for DataType {
         use DataType::*;
         {
             match (self, other) {
-                #[cfg(feature = "dtype-categorical")]
                 // Don't include rev maps in comparisons
-                // TODO: include ordering in comparison
-                (Categorical(_, _ordering_l), Categorical(_, _ordering_r)) => true,
+                #[cfg(feature = "dtype-categorical")]
+                (Categorical(_, _), Categorical(_, _)) => true,
                 #[cfg(feature = "dtype-categorical")]
                 // None means select all Enum dtypes. This is for operation `pl.col(pl.Enum)`
                 (Enum(None, _), Enum(_, _)) | (Enum(_, _), Enum(None, _)) => true,
@@ -185,41 +183,10 @@ impl DataType {
     pub fn is_known(&self) -> bool {
         match self {
             DataType::List(inner) => inner.is_known(),
-            #[cfg(feature = "dtype-array")]
-            DataType::Array(inner, _) => inner.is_known(),
             #[cfg(feature = "dtype-struct")]
             DataType::Struct(fields) => fields.iter().all(|fld| fld.dtype.is_known()),
             DataType::Unknown(_) => false,
             _ => true,
-        }
-    }
-
-    /// Materialize this datatype if it is unknown. All other datatypes
-    /// are left unchanged.
-    pub fn materialize_unknown(&self) -> PolarsResult<DataType> {
-        match self {
-            DataType::Unknown(u) => u
-                .materialize()
-                .ok_or_else(|| polars_err!(SchemaMismatch: "failed to materialize unknown type")),
-            DataType::List(inner) => Ok(DataType::List(Box::new(inner.materialize_unknown()?))),
-            #[cfg(feature = "dtype-array")]
-            DataType::Array(inner, size) => Ok(DataType::Array(
-                Box::new(inner.materialize_unknown()?),
-                *size,
-            )),
-            #[cfg(feature = "dtype-struct")]
-            DataType::Struct(fields) => Ok(DataType::Struct(
-                fields
-                    .iter()
-                    .map(|f| {
-                        PolarsResult::Ok(Field::new(
-                            f.name().clone(),
-                            f.dtype().materialize_unknown()?,
-                        ))
-                    })
-                    .try_collect_vec()?,
-            )),
-            _ => Ok(self.clone()),
         }
     }
 
@@ -315,10 +282,6 @@ impl DataType {
             },
             _ => self.clone(),
         }
-    }
-
-    pub fn is_supported_list_arithmetic_input(&self) -> bool {
-        self.is_numeric() || self.is_bool() || self.is_null()
     }
 
     /// Check if this [`DataType`] is a logical type
@@ -576,52 +539,6 @@ impl DataType {
         }
     }
 
-    /// Try to get the maximum value for this datatype.
-    pub fn max(&self) -> PolarsResult<Scalar> {
-        use DataType::*;
-        let v = match self {
-            #[cfg(feature = "dtype-i8")]
-            Int8 => Scalar::from(i8::MAX),
-            #[cfg(feature = "dtype-i16")]
-            Int16 => Scalar::from(i16::MAX),
-            Int32 => Scalar::from(i32::MAX),
-            Int64 => Scalar::from(i64::MAX),
-            #[cfg(feature = "dtype-u8")]
-            UInt8 => Scalar::from(u8::MAX),
-            #[cfg(feature = "dtype-u16")]
-            UInt16 => Scalar::from(u16::MAX),
-            UInt32 => Scalar::from(u32::MAX),
-            UInt64 => Scalar::from(u64::MAX),
-            Float32 => Scalar::from(f32::INFINITY),
-            Float64 => Scalar::from(f64::INFINITY),
-            dt => polars_bail!(ComputeError: "cannot determine upper bound for dtype `{}`", dt),
-        };
-        Ok(v)
-    }
-
-    /// Try to get the minimum value for this datatype.
-    pub fn min(&self) -> PolarsResult<Scalar> {
-        use DataType::*;
-        let v = match self {
-            #[cfg(feature = "dtype-i8")]
-            Int8 => Scalar::from(i8::MIN),
-            #[cfg(feature = "dtype-i16")]
-            Int16 => Scalar::from(i16::MIN),
-            Int32 => Scalar::from(i32::MIN),
-            Int64 => Scalar::from(i64::MIN),
-            #[cfg(feature = "dtype-u8")]
-            UInt8 => Scalar::from(u8::MIN),
-            #[cfg(feature = "dtype-u16")]
-            UInt16 => Scalar::from(u16::MIN),
-            UInt32 => Scalar::from(u32::MIN),
-            UInt64 => Scalar::from(u64::MIN),
-            Float32 => Scalar::from(f32::NEG_INFINITY),
-            Float64 => Scalar::from(f64::NEG_INFINITY),
-            dt => polars_bail!(ComputeError: "cannot determine lower bound for dtype `{}`", dt),
-        };
-        Ok(v)
-    }
-
     /// Convert to an Arrow data type.
     #[inline]
     pub fn to_arrow(&self, compat_level: CompatLevel) -> ArrowDataType {
@@ -674,9 +591,10 @@ impl DataType {
             Duration(unit) => Ok(ArrowDataType::Duration(unit.to_arrow())),
             Time => Ok(ArrowDataType::Time64(ArrowTimeUnit::Nanosecond)),
             #[cfg(feature = "dtype-array")]
-            Array(dt, size) => Ok(dt
-                .try_to_arrow(compat_level)?
-                .to_fixed_size_list(*size, true)),
+            Array(dt, size) => Ok(ArrowDataType::FixedSizeList(
+                Box::new(dt.to_arrow_field(PlSmallStr::from_static("item"), compat_level)),
+                *size,
+            )),
             List(dt) => Ok(ArrowDataType::LargeList(Box::new(
                 dt.to_arrow_field(PlSmallStr::from_static("item"), compat_level),
             ))),
@@ -731,8 +649,6 @@ impl DataType {
         match self {
             Null => true,
             List(field) => field.is_nested_null(),
-            #[cfg(feature = "dtype-array")]
-            Array(field, _) => field.is_nested_null(),
             #[cfg(feature = "dtype-struct")]
             Struct(fields) => fields.iter().all(|fld| fld.dtype.is_nested_null()),
             _ => false,
@@ -748,10 +664,6 @@ impl DataType {
     pub fn matches_schema_type(&self, schema_type: &DataType) -> PolarsResult<bool> {
         match (self, schema_type) {
             (DataType::List(l), DataType::List(r)) => l.matches_schema_type(r),
-            #[cfg(feature = "dtype-array")]
-            (DataType::Array(l, sl), DataType::Array(r, sr)) => {
-                Ok(l.matches_schema_type(r)? && sl == sr)
-            },
             #[cfg(feature = "dtype-struct")]
             (DataType::Struct(l), DataType::Struct(r)) => {
                 let mut must_cast = false;
@@ -852,6 +764,7 @@ impl Display for DataType {
 }
 
 pub fn merge_dtypes(left: &DataType, right: &DataType) -> PolarsResult<DataType> {
+    // TODO! add struct
     use DataType::*;
     Ok(match (left, right) {
         #[cfg(feature = "dtype-categorical")]
@@ -880,16 +793,6 @@ pub fn merge_dtypes(left: &DataType, right: &DataType) -> PolarsResult<DataType>
         (List(inner_l), List(inner_r)) => {
             let merged = merge_dtypes(inner_l, inner_r)?;
             List(Box::new(merged))
-        },
-        #[cfg(feature = "dtype-struct")]
-        (Struct(inner_l), Struct(inner_r)) => {
-            polars_ensure!(inner_l.len() == inner_r.len(), ComputeError: "cannot combine structs with differing amounts of fields ({} != {})", inner_l.len(), inner_r.len());
-            let fields = inner_l.iter().zip(inner_r.iter()).map(|(l, r)| {
-                polars_ensure!(l.name() == r.name(), ComputeError: "cannot combine structs with different fields ({} != {})", l.name(), r.name());
-                let merged = merge_dtypes(l.dtype(), r.dtype())?;
-                Ok(Field::new(l.name().clone(), merged))
-            }).collect::<PolarsResult<Vec<_>>>()?;
-            Struct(fields)
         },
         #[cfg(feature = "dtype-array")]
         (Array(inner_l, width_l), Array(inner_r, width_r)) => {

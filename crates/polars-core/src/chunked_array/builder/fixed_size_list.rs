@@ -1,5 +1,6 @@
 use arrow::types::NativeType;
 use polars_utils::pl_str::PlSmallStr;
+use polars_utils::unwrap::UnwrapUncheckedRelease;
 
 use crate::prelude::*;
 
@@ -45,8 +46,8 @@ impl<T: NativeType> FixedSizeListBuilder for FixedSizeListNumericBuilder<T> {
         let arr = arr
             .as_any()
             .downcast_ref::<PrimitiveArray<T>>()
-            .unwrap_unchecked();
-        let inner = self.inner.as_mut().unwrap_unchecked();
+            .unwrap_unchecked_release();
+        let inner = self.inner.as_mut().unwrap_unchecked_release();
 
         let values = arr.values().as_slice();
         let validity = arr.validity();
@@ -67,7 +68,7 @@ impl<T: NativeType> FixedSizeListBuilder for FixedSizeListNumericBuilder<T> {
 
     #[inline]
     unsafe fn push_null(&mut self) {
-        let inner = self.inner.as_mut().unwrap_unchecked();
+        let inner = self.inner.as_mut().unwrap_unchecked_release();
         inner.push_null()
     }
 

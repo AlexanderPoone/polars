@@ -2,9 +2,9 @@ use std::io::Write;
 
 #[cfg(feature = "async")]
 use futures::AsyncWrite;
-use polars_parquet_format::thrift::protocol::TCompactOutputProtocol;
+use parquet_format_safe::thrift::protocol::TCompactOutputProtocol;
 #[cfg(feature = "async")]
-use polars_parquet_format::thrift::protocol::TCompactOutputStreamProtocol;
+use parquet_format_safe::thrift::protocol::TCompactOutputStreamProtocol;
 
 use super::serialize::{serialize_column_index, serialize_offset_index};
 use crate::parquet::error::ParquetResult;

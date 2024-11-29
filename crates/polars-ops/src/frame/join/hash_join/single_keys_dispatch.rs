@@ -20,7 +20,7 @@ pub trait SeriesJoin: SeriesSealed + Sized {
     ) -> PolarsResult<LeftJoinIds> {
         let s_self = self.as_series();
         let (lhs, rhs) = (s_self.to_physical_repr(), other.to_physical_repr());
-        validate.validate_probe(&lhs, &rhs, false, join_nulls)?;
+        validate.validate_probe(&lhs, &rhs, false)?;
 
         let lhs_dtype = lhs.dtype();
         let rhs_dtype = rhs.dtype();
@@ -35,8 +35,7 @@ pub trait SeriesJoin: SeriesSealed + Sized {
                 let (lhs, rhs, _, _) = prepare_binary::<BinaryType>(lhs, rhs, false);
                 let lhs = lhs.iter().map(|v| v.as_slice()).collect::<Vec<_>>();
                 let rhs = rhs.iter().map(|v| v.as_slice()).collect::<Vec<_>>();
-                let build_null_count = other.null_count();
-                hash_join_tuples_left(lhs, rhs, None, None, validate, join_nulls, build_null_count)
+                hash_join_tuples_left(lhs, rhs, None, None, validate, join_nulls)
             },
             T::BinaryOffset => {
                 let lhs = lhs.binary_offset().unwrap();
@@ -45,8 +44,7 @@ pub trait SeriesJoin: SeriesSealed + Sized {
                 // Take slices so that vecs are not copied
                 let lhs = lhs.iter().map(|k| k.as_slice()).collect::<Vec<_>>();
                 let rhs = rhs.iter().map(|k| k.as_slice()).collect::<Vec<_>>();
-                let build_null_count = other.null_count();
-                hash_join_tuples_left(lhs, rhs, None, None, validate, join_nulls, build_null_count)
+                hash_join_tuples_left(lhs, rhs, None, None, validate, join_nulls)
             },
             x if x.is_float() => {
                 with_match_physical_float_polars_type!(lhs.dtype(), |$T| {
@@ -170,7 +168,7 @@ pub trait SeriesJoin: SeriesSealed + Sized {
     ) -> PolarsResult<(InnerJoinIds, bool)> {
         let s_self = self.as_series();
         let (lhs, rhs) = (s_self.to_physical_repr(), other.to_physical_repr());
-        validate.validate_probe(&lhs, &rhs, true, join_nulls)?;
+        validate.validate_probe(&lhs, &rhs, true)?;
 
         let lhs_dtype = lhs.dtype();
         let rhs_dtype = rhs.dtype();
@@ -186,20 +184,8 @@ pub trait SeriesJoin: SeriesSealed + Sized {
                 // Take slices so that vecs are not copied
                 let lhs = lhs.iter().map(|k| k.as_slice()).collect::<Vec<_>>();
                 let rhs = rhs.iter().map(|k| k.as_slice()).collect::<Vec<_>>();
-                let build_null_count = if swapped {
-                    s_self.null_count()
-                } else {
-                    other.null_count()
-                };
                 Ok((
-                    hash_join_tuples_inner(
-                        lhs,
-                        rhs,
-                        swapped,
-                        validate,
-                        join_nulls,
-                        build_null_count,
-                    )?,
+                    hash_join_tuples_inner(lhs, rhs, swapped, validate, join_nulls)?,
                     !swapped,
                 ))
             },
@@ -210,20 +196,8 @@ pub trait SeriesJoin: SeriesSealed + Sized {
                 // Take slices so that vecs are not copied
                 let lhs = lhs.iter().map(|k| k.as_slice()).collect::<Vec<_>>();
                 let rhs = rhs.iter().map(|k| k.as_slice()).collect::<Vec<_>>();
-                let build_null_count = if swapped {
-                    s_self.null_count()
-                } else {
-                    other.null_count()
-                };
                 Ok((
-                    hash_join_tuples_inner(
-                        lhs,
-                        rhs,
-                        swapped,
-                        validate,
-                        join_nulls,
-                        build_null_count,
-                    )?,
+                    hash_join_tuples_inner(lhs, rhs, swapped, validate, join_nulls)?,
                     !swapped,
                 ))
             },
@@ -270,7 +244,7 @@ pub trait SeriesJoin: SeriesSealed + Sized {
     ) -> PolarsResult<(PrimitiveArray<IdxSize>, PrimitiveArray<IdxSize>)> {
         let s_self = self.as_series();
         let (lhs, rhs) = (s_self.to_physical_repr(), other.to_physical_repr());
-        validate.validate_probe(&lhs, &rhs, true, join_nulls)?;
+        validate.validate_probe(&lhs, &rhs, true)?;
 
         let lhs_dtype = lhs.dtype();
         let rhs_dtype = rhs.dtype();
@@ -378,38 +352,20 @@ where
                     .map(|arr| arr.as_slice().unwrap())
                     .collect::<Vec<_>>();
                 Ok((
-                    hash_join_tuples_inner(
-                        splitted_a, splitted_b, swapped, validate, join_nulls, 0,
-                    )?,
+                    hash_join_tuples_inner(splitted_a, splitted_b, swapped, validate, join_nulls)?,
                     !swapped,
                 ))
             } else {
                 Ok((
-                    hash_join_tuples_inner(
-                        splitted_a, splitted_b, swapped, validate, join_nulls, 0,
-                    )?,
+                    hash_join_tuples_inner(splitted_a, splitted_b, swapped, validate, join_nulls)?,
                     !swapped,
                 ))
             }
         },
-        _ => {
-            let build_null_count = if swapped {
-                left.null_count()
-            } else {
-                right.null_count()
-            };
-            Ok((
-                hash_join_tuples_inner(
-                    splitted_a,
-                    splitted_b,
-                    swapped,
-                    validate,
-                    join_nulls,
-                    build_null_count,
-                )?,
-                !swapped,
-            ))
-        },
+        _ => Ok((
+            hash_join_tuples_inner(splitted_a, splitted_b, swapped, validate, join_nulls)?,
+            !swapped,
+        )),
     }
 }
 
@@ -474,7 +430,7 @@ where
         (0, 0, 1, 1) => {
             let keys_a = chunks_as_slices(&splitted_a);
             let keys_b = chunks_as_slices(&splitted_b);
-            hash_join_tuples_left(keys_a, keys_b, None, None, validate, join_nulls, 0)
+            hash_join_tuples_left(keys_a, keys_b, None, None, validate, join_nulls)
         },
         (0, 0, _, _) => {
             let keys_a = chunks_as_slices(&splitted_a);
@@ -489,7 +445,6 @@ where
                 mapping_right.as_deref(),
                 validate,
                 join_nulls,
-                0,
             )
         },
         _ => {
@@ -497,7 +452,6 @@ where
             let keys_b = get_arrays(&splitted_b);
             let (mapping_left, mapping_right) =
                 create_mappings(left.chunks(), right.chunks(), left.len(), right.len());
-            let build_null_count = right.null_count();
             hash_join_tuples_left(
                 keys_a,
                 keys_b,
@@ -505,7 +459,6 @@ where
                 mapping_right.as_deref(),
                 validate,
                 join_nulls,
-                build_null_count,
             )
         },
     }
@@ -554,7 +507,27 @@ where
     }
 }
 
-pub(crate) fn prepare_binary<'a, T>(
+#[cfg(feature = "asof_join")]
+pub fn prepare_bytes<'a>(
+    been_split: &'a [BinaryChunked],
+    hb: &PlRandomState,
+) -> Vec<Vec<BytesHash<'a>>> {
+    POOL.install(|| {
+        been_split
+            .par_iter()
+            .map(|ca| {
+                ca.iter()
+                    .map(|opt_b| {
+                        let hash = hb.hash_one(opt_b);
+                        BytesHash::new(opt_b, hash)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    })
+}
+
+fn prepare_binary<'a, T>(
     ca: &'a ChunkedArray<T>,
     other: &'a ChunkedArray<T>,
     // In inner join and outer join, the shortest relation will be used to create a hash table.

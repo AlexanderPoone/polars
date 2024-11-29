@@ -6,16 +6,13 @@ import random
 import string
 import sys
 import tracemalloc
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, Generator, List, cast
 
 import numpy as np
 import pytest
 
 import polars as pl
 from polars.testing.parametric import load_profile
-
-if TYPE_CHECKING:
-    from collections.abc import Generator
 
 load_profile(
     profile=os.environ.get("POLARS_HYPOTHESIS_PROFILE", "fast"),  # type: ignore[arg-type]
@@ -131,7 +128,7 @@ for T in ["T", " "]:
 
 @pytest.fixture(params=ISO8601_FORMATS_DATETIME)
 def iso8601_format_datetime(request: pytest.FixtureRequest) -> list[str]:
-    return cast(list[str], request.param)
+    return cast(List[str], request.param)
 
 
 ISO8601_TZ_AWARE_FORMATS_DATETIME = []
@@ -154,7 +151,7 @@ for T in ["T", " "]:
 
 @pytest.fixture(params=ISO8601_TZ_AWARE_FORMATS_DATETIME)
 def iso8601_tz_aware_format_datetime(request: pytest.FixtureRequest) -> list[str]:
-    return cast(list[str], request.param)
+    return cast(List[str], request.param)
 
 
 ISO8601_FORMATS_DATE = []
@@ -166,7 +163,7 @@ for date_sep in ("/", "-"):
 
 @pytest.fixture(params=ISO8601_FORMATS_DATE)
 def iso8601_format_date(request: pytest.FixtureRequest) -> list[str]:
-    return cast(list[str], request.param)
+    return cast(List[str], request.param)
 
 
 class MemoryUsage:
@@ -212,7 +209,7 @@ def memory_usage_without_pyarrow() -> Generator[MemoryUsage, Any, Any]:
 
     Memory usage from PyArrow is not tracked.
     """
-    if not pl.polars._debug:  # type: ignore[attr-defined]
+    if not pl.build_info()["compiler"]["debug"]:
         pytest.skip("Memory usage only available in debug/dev builds.")
 
     if os.getenv("POLARS_FORCE_ASYNC", "0") == "1":

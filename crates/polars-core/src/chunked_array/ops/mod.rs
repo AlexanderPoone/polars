@@ -7,13 +7,8 @@ pub(crate) mod aggregate;
 pub(crate) mod any_value;
 pub(crate) mod append;
 mod apply;
-#[cfg(feature = "approx_unique")]
-mod approx_n_unique;
 pub mod arity;
 mod bit_repr;
-mod bits;
-#[cfg(feature = "bitwise")]
-mod bitwise_reduce;
 pub(crate) mod chunkops;
 pub(crate) mod compare_inner;
 #[cfg(feature = "dtype-decimal")]
@@ -34,7 +29,6 @@ pub(crate) mod nulls;
 mod reverse;
 #[cfg(feature = "rolling_window")]
 pub(crate) mod rolling_window;
-pub mod row_encode;
 pub mod search_sorted;
 mod set;
 mod shift;
@@ -44,6 +38,7 @@ pub(crate) mod unique;
 #[cfg(feature = "zip_with")]
 pub mod zip;
 
+use polars_utils::no_call_const;
 #[cfg(feature = "serde-lazy")]
 use serde::{Deserialize, Serialize};
 pub use sort::options::*;
@@ -279,7 +274,11 @@ pub trait ChunkQuantile<T> {
     }
     /// Aggregate a given quantile of the ChunkedArray.
     /// Returns `None` if the array is empty or only contains null values.
-    fn quantile(&self, _quantile: f64, _method: QuantileMethod) -> PolarsResult<Option<T>> {
+    fn quantile(
+        &self,
+        _quantile: f64,
+        _interpol: QuantileInterpolOptions,
+    ) -> PolarsResult<Option<T>> {
         Ok(None)
     }
 }
@@ -297,16 +296,6 @@ pub trait ChunkVar {
     }
 }
 
-/// Bitwise Reduction Operations.
-#[cfg(feature = "bitwise")]
-pub trait ChunkBitwiseReduce {
-    type Physical;
-
-    fn and_reduce(&self) -> Option<Self::Physical>;
-    fn or_reduce(&self) -> Option<Self::Physical>;
-    fn xor_reduce(&self) -> Option<Self::Physical>;
-}
-
 /// Compare [`Series`] and [`ChunkedArray`]'s and get a `boolean` mask that
 /// can be used to filter rows.
 ///
@@ -317,13 +306,12 @@ pub trait ChunkBitwiseReduce {
 /// fn filter_all_ones(df: &DataFrame) -> PolarsResult<DataFrame> {
 ///     let mask = df
 ///     .column("column_a")?
-///     .as_materialized_series()
 ///     .equal(1)?;
 ///
 ///     df.filter(&mask)
 /// }
 /// ```
-pub trait ChunkCompareEq<Rhs> {
+pub trait ChunkCompare<Rhs> {
     type Item;
 
     /// Check for equality.
@@ -337,24 +325,30 @@ pub trait ChunkCompareEq<Rhs> {
 
     /// Check for inequality where `None == None`.
     fn not_equal_missing(&self, rhs: Rhs) -> Self::Item;
-}
-
-/// Compare [`Series`] and [`ChunkedArray`]'s using inequality operators (`<`, `>=`, etc.) and get
-/// a `boolean` mask that can be used to filter rows.
-pub trait ChunkCompareIneq<Rhs> {
-    type Item;
 
     /// Greater than comparison.
-    fn gt(&self, rhs: Rhs) -> Self::Item;
+    #[allow(unused_variables)]
+    fn gt(&self, rhs: Rhs) -> Self::Item {
+        no_call_const!()
+    }
 
     /// Greater than or equal comparison.
-    fn gt_eq(&self, rhs: Rhs) -> Self::Item;
+    #[allow(unused_variables)]
+    fn gt_eq(&self, rhs: Rhs) -> Self::Item {
+        no_call_const!()
+    }
 
     /// Less than comparison.
-    fn lt(&self, rhs: Rhs) -> Self::Item;
+    #[allow(unused_variables)]
+    fn lt(&self, rhs: Rhs) -> Self::Item {
+        no_call_const!()
+    }
 
     /// Less than or equal comparison
-    fn lt_eq(&self, rhs: Rhs) -> Self::Item;
+    #[allow(unused_variables)]
+    fn lt_eq(&self, rhs: Rhs) -> Self::Item {
+        no_call_const!()
+    }
 }
 
 /// Get unique values in a `ChunkedArray`
@@ -375,11 +369,6 @@ pub trait ChunkUnique {
     }
 }
 
-#[cfg(feature = "approx_unique")]
-pub trait ChunkApproxNUnique {
-    fn approx_n_unique(&self) -> IdxSize;
-}
-
 /// Sort operations on `ChunkedArray`.
 pub trait ChunkSort<T: PolarsDataType> {
     #[allow(unused_variables)]
@@ -395,7 +384,7 @@ pub trait ChunkSort<T: PolarsDataType> {
     #[allow(unused_variables)]
     fn arg_sort_multiple(
         &self,
-        by: &[Column],
+        by: &[Series],
         _options: &SortMultipleOptions,
     ) -> PolarsResult<IdxCa> {
         polars_bail!(opq = arg_sort_multiple, T::get_dtype());
@@ -426,13 +415,6 @@ pub enum FillNullStrategy {
     /// replace with the minimal value of that data type
     MinBound,
 }
-
-impl FillNullStrategy {
-    pub fn is_elementwise(&self) -> bool {
-        matches!(self, Self::One | Self::Zero)
-    }
-}
-
 /// Replace None values with a value
 pub trait ChunkFillNullValue<T> {
     /// Replace None values with a give value `T`.
@@ -574,7 +556,7 @@ impl ChunkExpandAtIndex<StructType> for StructChunked {
                 })
                 .collect::<Vec<_>>();
 
-            StructArray::new(chunk.dtype().clone(), length, values, None).boxed()
+            StructArray::new(chunk.dtype().clone(), values, None).boxed()
         };
 
         // SAFETY: chunks are from self.

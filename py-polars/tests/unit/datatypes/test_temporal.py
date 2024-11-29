@@ -12,7 +12,6 @@ import pytest
 from hypothesis import given
 
 import polars as pl
-import polars.selectors as cs
 from polars.datatypes import DTYPE_TEMPORAL_UNITS
 from polars.exceptions import (
     ComputeError,
@@ -633,7 +632,16 @@ def test_asof_join() -> None:
         "2016-05-25 13:30:00.072",
         "2016-05-25 13:30:00.075",
     ]
-    ticker = ["GOOG", "MSFT", "MSFT", "MSFT", "GOOG", "AAPL", "GOOG", "MSFT"]
+    ticker = [
+        "GOOG",
+        "MSFT",
+        "MSFT",
+        "MSFT",
+        "GOOG",
+        "AAPL",
+        "GOOG",
+        "MSFT",
+    ]
     quotes = pl.DataFrame(
         {
             "dates": pl.Series(dates).str.strptime(pl.Datetime, format=format),
@@ -648,7 +656,13 @@ def test_asof_join() -> None:
         "2016-05-25 13:30:00.048",
         "2016-05-25 13:30:00.048",
     ]
-    ticker = ["MSFT", "MSFT", "GOOG", "GOOG", "AAPL"]
+    ticker = [
+        "MSFT",
+        "MSFT",
+        "GOOG",
+        "GOOG",
+        "AAPL",
+    ]
     trades = pl.DataFrame(
         {
             "dates": pl.Series(dates).str.strptime(pl.Datetime, format=format),
@@ -664,11 +678,11 @@ def test_asof_join() -> None:
     out = trades.join_asof(quotes, on="dates", strategy="backward")
 
     assert out.schema == {
+        "bid": pl.Float64,
+        "bid_right": pl.Float64,
         "dates": pl.Datetime("ms"),
         "ticker": pl.String,
-        "bid": pl.Float64,
         "ticker_right": pl.String,
-        "bid_right": pl.Float64,
     }
     assert out.columns == ["dates", "ticker", "bid", "ticker_right", "bid_right"]
     assert (out["dates"].cast(int)).to_list() == [
@@ -1093,112 +1107,6 @@ def test_datetime_string_casts() -> None:
             "2022-08-30 10:30:45.123456789",
         )
     ]
-    assert df.select(
-        pl.col("x").dt.to_string("iso").name.suffix(":iso"),
-        pl.col("y").dt.to_string("iso").name.suffix(":iso"),
-        pl.col("z").dt.to_string("iso").name.suffix(":iso"),
-    ).rows() == [
-        (
-            "2022-08-30 10:30:45.123",
-            "2022-08-30 10:30:45.123456",
-            "2022-08-30 10:30:45.123456789",
-        )
-    ]
-    assert df.select(
-        pl.col("x").dt.to_string("iso:strict").name.suffix(":iso:strict"),
-        pl.col("y").dt.to_string("iso:strict").name.suffix(":iso:strict"),
-        pl.col("z").dt.to_string("iso:strict").name.suffix(":iso:strict"),
-    ).rows() == [
-        (
-            "2022-08-30T10:30:45.123",
-            "2022-08-30T10:30:45.123456",
-            "2022-08-30T10:30:45.123456789",
-        )
-    ]
-
-
-def test_temporal_to_string_iso_default() -> None:
-    df = pl.DataFrame(
-        {
-            "td": [
-                timedelta(days=-1, seconds=-42),
-                timedelta(days=14, hours=-10, microseconds=1001),
-                timedelta(seconds=0),
-            ],
-            "tm": [
-                time(1, 2, 3, 456789),
-                time(23, 59, 9, 101),
-                time(0),
-            ],
-            "dt": [
-                date(1999, 3, 1),
-                date(2020, 5, 3),
-                date(2077, 7, 5),
-            ],
-            "dtm": [
-                datetime(1980, 8, 10, 0, 10, 20),
-                datetime(2010, 10, 20, 8, 25, 35),
-                datetime(2040, 12, 30, 16, 40, 50),
-            ],
-        }
-    ).with_columns(dtm_tz=pl.col("dtm").dt.replace_time_zone("Asia/Kathmandu"))
-
-    df_stringified = df.select(
-        pl.col("td").dt.to_string("polars").alias("td_pl"),
-        cs.temporal().dt.to_string().name.suffix(":iso"),
-        cs.datetime().dt.to_string("iso:strict").name.suffix(":iso:strict"),
-    )
-    assert df_stringified.to_dict(as_series=False) == {
-        "td_pl": [
-            "-1d -42s",
-            "13d 14h 1001µs",
-            "0µs",
-        ],
-        "td:iso": [
-            "-P1DT42S",
-            "P13DT14H0.001001S",
-            "PT0S",
-        ],
-        "tm:iso": [
-            "01:02:03.456789",
-            "23:59:09.000101",
-            "00:00:00",
-        ],
-        "dt:iso": [
-            "1999-03-01",
-            "2020-05-03",
-            "2077-07-05",
-        ],
-        "dtm:iso": [
-            "1980-08-10 00:10:20.000000",
-            "2010-10-20 08:25:35.000000",
-            "2040-12-30 16:40:50.000000",
-        ],
-        "dtm_tz:iso": [
-            "1980-08-10 00:10:20.000000+05:30",
-            "2010-10-20 08:25:35.000000+05:45",
-            "2040-12-30 16:40:50.000000+05:45",
-        ],
-        "dtm:iso:strict": [
-            "1980-08-10T00:10:20.000000",
-            "2010-10-20T08:25:35.000000",
-            "2040-12-30T16:40:50.000000",
-        ],
-        "dtm_tz:iso:strict": [
-            "1980-08-10T00:10:20.000000+05:30",
-            "2010-10-20T08:25:35.000000+05:45",
-            "2040-12-30T16:40:50.000000+05:45",
-        ],
-    }
-
-
-def test_temporal_to_string_error() -> None:
-    df = pl.DataFrame({"td": [timedelta(days=1)], "dt": [date(2024, 11, 25)]})
-    with pytest.raises(
-        InvalidOperationError,
-        match="'polars' is not a valid `to_string` format for date dtype expressions",
-    ):
-        df.select(cs.temporal().dt.to_string("polars"))
 
 
 def test_iso_year() -> None:
@@ -1456,6 +1364,7 @@ def test_replace_time_zone_ambiguous_raises() -> None:
     ("from_tz", "expected_sortedness", "ambiguous"),
     [
         ("Europe/London", False, "earliest"),
+        ("Europe/London", False, "raise"),
         ("UTC", True, "earliest"),
         ("UTC", True, "raise"),
         (None, True, "earliest"),
@@ -1466,20 +1375,20 @@ def test_replace_time_zone_sortedness_series(
     from_tz: str | None, expected_sortedness: bool, ambiguous: Ambiguous
 ) -> None:
     ser = (
-        pl.Series("ts", [1603584000000001, 1603587600000000])
+        pl.Series("ts", [1603584000000000, 1603587600000000])
         .cast(pl.Datetime("us", from_tz))
         .sort()
     )
     assert ser.flags["SORTED_ASC"]
     result = ser.dt.replace_time_zone("UTC", ambiguous=ambiguous)
     assert result.flags["SORTED_ASC"] == expected_sortedness
-    assert result.flags["SORTED_ASC"] == result.is_sorted()
 
 
 @pytest.mark.parametrize(
     ("from_tz", "expected_sortedness", "ambiguous"),
     [
         ("Europe/London", False, "earliest"),
+        ("Europe/London", False, "raise"),
         ("UTC", True, "earliest"),
         ("UTC", True, "raise"),
         (None, True, "earliest"),
@@ -1490,7 +1399,7 @@ def test_replace_time_zone_sortedness_expressions(
     from_tz: str | None, expected_sortedness: bool, ambiguous: str
 ) -> None:
     df = (
-        pl.Series("ts", [1603584000000001, 1603584060000000, 1603587600000000])
+        pl.Series("ts", [1603584000000000, 1603584060000000, 1603587600000000])
         .cast(pl.Datetime("us", from_tz))
         .sort()
         .to_frame()
@@ -1501,7 +1410,6 @@ def test_replace_time_zone_sortedness_expressions(
         pl.col("ts").dt.replace_time_zone("UTC", ambiguous=pl.col("ambiguous"))
     )
     assert result["ts"].flags["SORTED_ASC"] == expected_sortedness
-    assert result["ts"].is_sorted() == expected_sortedness
 
 
 def test_invalid_ambiguous_value_in_expression() -> None:

@@ -16,7 +16,7 @@ pub(super) fn position_aggregates(
     value_agg_phys: &Series,
     logical_type: &DataType,
     headers: &StringChunked,
-) -> Vec<Column> {
+) -> Vec<Series> {
     let mut buf = vec![AnyValue::Null; n_rows * n_cols];
     let start_ptr = buf.as_mut_ptr() as usize;
 
@@ -93,7 +93,7 @@ pub(super) fn position_aggregates(
                     },
                     _ => Series::from_any_values_and_dtype(name, avs, &phys_type, false).unwrap(),
                 };
-                unsafe { out.cast_unchecked(logical_type).unwrap() }.into()
+                unsafe { out.cast_unchecked(logical_type).unwrap() }
             })
             .collect::<Vec<_>>()
     })
@@ -107,7 +107,7 @@ pub(super) fn position_aggregates_numeric<T>(
     value_agg_phys: &ChunkedArray<T>,
     logical_type: &DataType,
     headers: &StringChunked,
-) -> Vec<Column>
+) -> Vec<Series>
 where
     T: PolarsNumericType,
     ChunkedArray<T>: IntoSeries,
@@ -172,7 +172,7 @@ where
                     .map(PlSmallStr::from_str)
                     .unwrap_or_else(|| PlSmallStr::from_static("null"));
                 let out = ChunkedArray::<T>::from_slice_options(name, opt_values).into_series();
-                unsafe { out.cast_unchecked(logical_type).unwrap() }.into()
+                unsafe { out.cast_unchecked(logical_type).unwrap() }
             })
             .collect::<Vec<_>>()
     })
@@ -231,7 +231,7 @@ pub(super) fn compute_col_idx(
     pivot_df: &DataFrame,
     column: &str,
     groups: &GroupsProxy,
-) -> PolarsResult<(Vec<IdxSize>, Column)> {
+) -> PolarsResult<(Vec<IdxSize>, Series)> {
     let column_s = pivot_df.column(column)?;
     let column_agg = unsafe { column_s.agg_first(groups) };
     let column_agg_physical = column_agg.to_physical_repr();
@@ -240,28 +240,22 @@ pub(super) fn compute_col_idx(
     let col_locations = match column_agg_physical.dtype() {
         T::Int32 | T::UInt32 => {
             let Some(BitRepr::Small(ca)) = column_agg_physical.bit_repr() else {
-                polars_bail!(ComputeError: "Expected 32-bit representation to be available; this should never happen");
+                polars_bail!(ComputeError: "Expected 32-bit bit representation to be available. This should never happen");
             };
             compute_col_idx_numeric(&ca)
         },
         T::Int64 | T::UInt64 => {
             let Some(BitRepr::Large(ca)) = column_agg_physical.bit_repr() else {
-                polars_bail!(ComputeError: "Expected 64-bit representation to be available; this should never happen");
+                polars_bail!(ComputeError: "Expected 64-bit bit representation to be available. This should never happen");
             };
             compute_col_idx_numeric(&ca)
         },
         T::Float64 => {
-            let ca: &ChunkedArray<Float64Type> = column_agg_physical
-                .as_materialized_series()
-                .as_ref()
-                .as_ref();
+            let ca: &ChunkedArray<Float64Type> = column_agg_physical.as_ref().as_ref().as_ref();
             compute_col_idx_numeric(ca)
         },
         T::Float32 => {
-            let ca: &ChunkedArray<Float32Type> = column_agg_physical
-                .as_materialized_series()
-                .as_ref()
-                .as_ref();
+            let ca: &ChunkedArray<Float32Type> = column_agg_physical.as_ref().as_ref().as_ref();
             compute_col_idx_numeric(ca)
         },
         T::Struct(_) => {
@@ -286,7 +280,6 @@ pub(super) fn compute_col_idx(
             let mut col_to_idx = PlHashMap::with_capacity(HASHMAP_INIT_SIZE);
             let mut idx = 0 as IdxSize;
             column_agg_physical
-                .as_materialized_series()
                 .phys_iter()
                 .map(|v| {
                     let idx = *col_to_idx.entry(v).or_insert_with(|| {
@@ -308,7 +301,7 @@ fn compute_row_index<'a, T>(
     index_agg_physical: &'a ChunkedArray<T>,
     count: usize,
     logical_type: &DataType,
-) -> (Vec<IdxSize>, usize, Option<Vec<Column>>)
+) -> (Vec<IdxSize>, usize, Option<Vec<Series>>)
 where
     T: PolarsDataType,
     T::Physical<'a>: TotalHash + TotalEq + Copy + ToTotalOrd,
@@ -344,7 +337,7 @@ where
                 .into_series();
             s.rename(index[0].clone());
             let s = restore_logical_type(&s, logical_type);
-            Some(vec![s.into()])
+            Some(vec![s])
         },
         _ => None,
     };
@@ -357,7 +350,7 @@ fn compute_row_index_struct(
     index_agg: &Series,
     index_agg_physical: &BinaryOffsetChunked,
     count: usize,
-) -> (Vec<IdxSize>, usize, Option<Vec<Column>>) {
+) -> (Vec<IdxSize>, usize, Option<Vec<Series>>) {
     let mut row_to_idx =
         PlIndexMap::with_capacity_and_hasher(HASHMAP_INIT_SIZE, Default::default());
     let mut idx = 0 as IdxSize;
@@ -389,7 +382,7 @@ fn compute_row_index_struct(
             // 0 and `index_agg.len() - 1`.
             let mut s = unsafe { index_agg.take_slice_unchecked(&unique_indices) };
             s.rename(index[0].clone());
-            Some(vec![s.into()])
+            Some(vec![s])
         },
         _ => None,
     };
@@ -403,7 +396,7 @@ pub(super) fn compute_row_idx(
     index: &[PlSmallStr],
     groups: &GroupsProxy,
     count: usize,
-) -> PolarsResult<(Vec<IdxSize>, usize, Option<Vec<Column>>)> {
+) -> PolarsResult<(Vec<IdxSize>, usize, Option<Vec<Series>>)> {
     let (row_locations, n_rows, row_index) = if index.len() == 1 {
         let index_s = pivot_df.column(&index[0])?;
         let index_agg = unsafe { index_s.agg_first(groups) };
@@ -413,28 +406,22 @@ pub(super) fn compute_row_idx(
         match index_agg_physical.dtype() {
             T::Int32 | T::UInt32 => {
                 let Some(BitRepr::Small(ca)) = index_agg_physical.bit_repr() else {
-                    polars_bail!(ComputeError: "Expected 32-bit representation to be available; this should never happen");
+                    polars_bail!(ComputeError: "Expected 32-bit bit representation to be available. This should never happen");
                 };
                 compute_row_index(index, &ca, count, index_s.dtype())
             },
             T::Int64 | T::UInt64 => {
                 let Some(BitRepr::Large(ca)) = index_agg_physical.bit_repr() else {
-                    polars_bail!(ComputeError: "Expected 64-bit representation to be available; this should never happen");
+                    polars_bail!(ComputeError: "Expected 64-bit bit representation to be available. This should never happen");
                 };
                 compute_row_index(index, &ca, count, index_s.dtype())
             },
             T::Float64 => {
-                let ca: &ChunkedArray<Float64Type> = index_agg_physical
-                    .as_materialized_series()
-                    .as_ref()
-                    .as_ref();
+                let ca: &ChunkedArray<Float64Type> = index_agg_physical.as_ref().as_ref().as_ref();
                 compute_row_index(index, ca, count, index_s.dtype())
             },
             T::Float32 => {
-                let ca: &ChunkedArray<Float32Type> = index_agg_physical
-                    .as_materialized_series()
-                    .as_ref()
-                    .as_ref();
+                let ca: &ChunkedArray<Float32Type> = index_agg_physical.as_ref().as_ref().as_ref();
                 compute_row_index(index, ca, count, index_s.dtype())
             },
             T::Boolean => {
@@ -444,7 +431,7 @@ pub(super) fn compute_row_idx(
             T::Struct(_) => {
                 let ca = index_agg_physical.struct_().unwrap();
                 let ca = ca.get_row_encoded(Default::default())?;
-                compute_row_index_struct(index, index_agg.as_materialized_series(), &ca, count)
+                compute_row_index_struct(index, &index_agg, &ca, count)
             },
             T::String => {
                 let ca = index_agg_physical.str().unwrap();
@@ -455,7 +442,6 @@ pub(super) fn compute_row_idx(
                     PlIndexMap::with_capacity_and_hasher(HASHMAP_INIT_SIZE, Default::default());
                 let mut idx = 0 as IdxSize;
                 let row_locations = index_agg_physical
-                    .as_materialized_series()
                     .phys_iter()
                     .map(|v| {
                         let idx = *row_to_idx.entry(v).or_insert_with(|| {
@@ -474,7 +460,7 @@ pub(super) fn compute_row_idx(
                             row_to_idx.into_iter().map(|(k, _)| k).collect::<Vec<_>>(),
                         );
                         let s = restore_logical_type(&s, index_s.dtype());
-                        Some(vec![Column::from(s)])
+                        Some(vec![s])
                     },
                     _ => None,
                 };
@@ -485,12 +471,9 @@ pub(super) fn compute_row_idx(
     } else {
         let binding = pivot_df.select(index.iter().cloned())?;
         let fields = binding.get_columns();
-        let index_struct_series = StructChunked::from_columns(
-            PlSmallStr::from_static("placeholder"),
-            fields[0].len(),
-            fields,
-        )?
-        .into_series();
+        let index_struct_series =
+            StructChunked::from_series(PlSmallStr::from_static("placeholder"), fields)?
+                .into_series();
         let index_agg = unsafe { index_struct_series.agg_first(groups) };
         let index_agg_physical = index_agg.to_physical_repr();
         let ca = index_agg_physical.struct_()?;
@@ -503,8 +486,7 @@ pub(super) fn compute_row_idx(
 
             polars_ensure!(ca.null_count() == 0, InvalidOperation: "outer nullability in struct pivot not yet supported");
 
-            // @scalar-opt
-            Ok(ca.fields_as_series().into_iter().map(Column::from).collect())
+            Ok(ca.fields_as_series())
         }).transpose()?;
         (row_locations, n_rows, row_index)
     };

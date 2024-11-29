@@ -25,7 +25,7 @@ pub struct SortedMinMax<'a, T: NativeType> {
     null_count: usize,
 }
 
-impl<T: NativeType> SortedMinMax<'_, T> {
+impl<'a, T: NativeType> SortedMinMax<'a, T> {
     fn count_nulls(&self, start: usize, end: usize) -> usize {
         let (bytes, offset, _) = self.validity.as_slice();
         count_zeros(bytes, offset + start, end - start)
@@ -38,7 +38,7 @@ impl<'a, T: NativeType> RollingAggWindowNulls<'a, T> for SortedMinMax<'a, T> {
         validity: &'a Bitmap,
         start: usize,
         end: usize,
-        _params: Option<RollingFnParams>,
+        _params: DynArgs,
     ) -> Self {
         let mut out = Self {
             slice,
@@ -258,7 +258,7 @@ impl<'a, T: NativeType + IsFloat + PartialOrd> RollingAggWindowNulls<'a, T> for 
         validity: &'a Bitmap,
         start: usize,
         end: usize,
-        _params: Option<RollingFnParams>,
+        _params: DynArgs,
     ) -> Self {
         Self {
             inner: MinMaxWindow::new(
@@ -287,7 +287,7 @@ pub fn rolling_min<T>(
     min_periods: usize,
     center: bool,
     weights: Option<&[f64]>,
-    _params: Option<RollingFnParams>,
+    _params: DynArgs,
 ) -> ArrayRef
 where
     T: NativeType + std::iter::Sum + Zero + AddAssign + Copy + PartialOrd + Bounded + IsFloat,
@@ -326,7 +326,7 @@ impl<'a, T: NativeType + IsFloat + PartialOrd> RollingAggWindowNulls<'a, T> for 
         validity: &'a Bitmap,
         start: usize,
         end: usize,
-        _params: Option<RollingFnParams>,
+        _params: DynArgs,
     ) -> Self {
         Self {
             inner: MinMaxWindow::new(
@@ -355,7 +355,7 @@ pub fn rolling_max<T>(
     min_periods: usize,
     center: bool,
     weights: Option<&[f64]>,
-    _params: Option<RollingFnParams>,
+    _params: DynArgs,
 ) -> ArrayRef
 where
     T: NativeType + std::iter::Sum + Zero + AddAssign + Copy + PartialOrd + Bounded + IsFloat,

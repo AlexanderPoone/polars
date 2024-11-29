@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from hypothesis import given
@@ -163,30 +163,11 @@ def test_sort_by_exprs() -> None:
     assert out.to_list() == [1, -1, 2, -2]
 
 
-@pytest.mark.parametrize(
-    ("sort_function", "expected"),
-    [
-        (lambda x: x, ([0, 1, 2, 3, 4], [3, 4, 0, 1, 2])),
-        (
-            lambda x: x.sort(descending=False, nulls_last=True),
-            ([0, 1, 2, 3, 4], [3, 4, 0, 1, 2]),
-        ),
-        (
-            lambda x: x.sort(descending=False, nulls_last=False),
-            ([2, 3, 4, 0, 1], [0, 1, 2, 3, 4]),
-        ),
-    ],
-)
-def test_arg_sort_nulls(
-    sort_function: Callable[[pl.Series], pl.Series],
-    expected: tuple[list[int], list[int]],
-) -> None:
+def test_arg_sort_nulls() -> None:
     a = pl.Series("a", [1.0, 2.0, 3.0, None, None])
 
-    a = sort_function(a)
-
-    assert a.arg_sort(nulls_last=True).to_list() == expected[0]
-    assert a.arg_sort(nulls_last=False).to_list() == expected[1]
+    assert a.arg_sort(nulls_last=True).to_list() == [0, 1, 2, 3, 4]
+    assert a.arg_sort(nulls_last=False).to_list() == [3, 4, 0, 1, 2]
 
     res = a.to_frame().sort(by="a", nulls_last=False).to_series().to_list()
     assert res == [None, None, 1.0, 2.0, 3.0]
@@ -432,7 +413,6 @@ def test_sort_by_in_over_5499() -> None:
     }
 
 
-@pytest.mark.may_fail_auto_streaming
 def test_merge_sorted() -> None:
     df_a = (
         pl.datetime_range(
@@ -826,10 +806,9 @@ def test_sort_string_nulls() -> None:
     ]
 
 
-@pytest.mark.may_fail_auto_streaming
 def test_sort_by_unequal_lengths_7207() -> None:
     df = pl.DataFrame({"a": [0, 1, 1, 0], "b": [3, 2, 3, 2]})
-    with pytest.raises(pl.exceptions.ShapeError):
+    with pytest.raises(pl.exceptions.ComputeError):
         df.select(pl.col.a.sort_by(["a", 1]))
 
 

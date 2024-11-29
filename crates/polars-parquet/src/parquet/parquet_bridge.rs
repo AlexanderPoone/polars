@@ -497,7 +497,6 @@ pub enum PrimitiveLogicalType {
     Json,
     Bson,
     Uuid,
-    Float16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -576,7 +575,6 @@ impl TryFrom<ParquetLogicalType> for PrimitiveLogicalType {
             ParquetLogicalType::JSON(_) => PrimitiveLogicalType::Json,
             ParquetLogicalType::BSON(_) => PrimitiveLogicalType::Bson,
             ParquetLogicalType::UUID(_) => PrimitiveLogicalType::Uuid,
-            ParquetLogicalType::FLOAT16(_) => PrimitiveLogicalType::Float16,
             _ => return Err(ParquetError::oos("LogicalType value out of range")),
         })
     }
@@ -631,7 +629,6 @@ impl From<PrimitiveLogicalType> for ParquetLogicalType {
             PrimitiveLogicalType::Json => ParquetLogicalType::JSON(Default::default()),
             PrimitiveLogicalType::Bson => ParquetLogicalType::BSON(Default::default()),
             PrimitiveLogicalType::Uuid => ParquetLogicalType::UUID(Default::default()),
-            PrimitiveLogicalType::Float16 => ParquetLogicalType::FLOAT16(Default::default()),
         }
     }
 }

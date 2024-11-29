@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Generator, Iterator
 from datetime import date, datetime, time, timedelta
 from itertools import islice
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Generator,
+    Iterable,
+    Iterator,
+    Sequence,
 )
 
 import polars._reexport as pl
@@ -17,7 +20,6 @@ from polars._utils.construction.utils import (
     is_namedtuple,
     is_pydantic_model,
     is_simple_numpy_backed_pandas_series,
-    is_sqlalchemy,
 )
 from polars._utils.various import (
     range_to_series,
@@ -37,7 +39,6 @@ from polars.datatypes import (
     Object,
     Struct,
     Time,
-    UInt32,
     Unknown,
     dtype_to_py_type,
     is_polars_dtype,
@@ -59,14 +60,11 @@ from polars.dependencies import (
 from polars.dependencies import numpy as np
 from polars.dependencies import pandas as pd
 from polars.dependencies import pyarrow as pa
-from polars.functions.eager import concat
 
 with contextlib.suppress(ImportError):  # Module not available when building docs
-    from polars.polars import PySeries, get_index_type
+    from polars.polars import PySeries
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
-
     from polars import DataFrame, Series
     from polars._typing import PolarsDataType
     from polars.dependencies import pandas as pd
@@ -106,7 +104,6 @@ def sequence_to_pyseries(
             dataclasses.is_dataclass(value)
             or is_pydantic_model(value)
             or is_namedtuple(value.__class__)
-            or is_sqlalchemy(value)
         ) and dtype != Object:
             return pl.DataFrame(values).to_struct(name)._s
         elif isinstance(value, range) and dtype is None:
@@ -458,48 +455,27 @@ def numpy_to_pyseries(
         return constructor(
             name, values, nan_to_null if dtype in (np.float32, np.float64) else strict
         )
+    elif sum(values.shape) == 0:
+        # Optimize by ingesting 1D and reshaping in Rust
+        original_shape = values.shape
+        values = values.reshape(-1)
+        py_s = numpy_to_pyseries(
+            name,
+            values,
+            strict=strict,
+            nan_to_null=nan_to_null,
+        )
+        return wrap_s(py_s).reshape(original_shape)._s
     else:
         original_shape = values.shape
-        values_1d = values.reshape(-1)
-
-        if get_index_type() == UInt32:
-            limit = 2**32 - 1
-        else:
-            limit = 2**64 - 1
-
-        if values.size <= limit:
-            py_s = numpy_to_pyseries(
-                name,
-                values_1d,
-                strict=strict,
-                nan_to_null=nan_to_null,
-            )
-            return wrap_s(py_s).reshape(original_shape)._s
-        else:
-            # Process in chunk, so we don't trigger ROWS_LIMIT
-            offset = 0
-            chunks = []
-
-            # Tuples are immutable, so convert to list
-            original_shape_chunk = list(original_shape)
-            # Rows size is now changed, so infer
-            original_shape_chunk[0] = -1
-            original_shape_chunk_t = tuple(original_shape_chunk)
-            while True:
-                chunk = values_1d[offset : offset + limit]
-                offset += limit
-                if chunk.shape[0] == 0:
-                    break
-
-                py_s = numpy_to_pyseries(
-                    name,
-                    chunk,
-                    strict=strict,
-                    nan_to_null=nan_to_null,
-                )
-                chunks.append(wrap_s(py_s).reshape(original_shape_chunk_t))
-
-            return concat(chunks)._s
+        values = values.reshape(-1)
+        py_s = numpy_to_pyseries(
+            name,
+            values,
+            strict=strict,
+            nan_to_null=nan_to_null,
+        )
+        return wrap_s(py_s).reshape(original_shape)._s
 
 
 def series_to_pyseries(

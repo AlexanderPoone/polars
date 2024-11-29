@@ -216,11 +216,14 @@ impl Source for CsvSource {
                 };
 
                 for data_chunk in &mut out {
-                    let n = data_chunk.data.height();
-                    // SAFETY: Columns are only replaced with columns
-                    // 1. of the same name, and
-                    // 2. of the same length.
-                    unsafe { data_chunk.data.get_columns_mut() }.push(ca.slice(0, n).into_column())
+                    // The batched reader creates the column containing all nulls because the schema it
+                    // gets passed contains the column.
+                    for s in unsafe { data_chunk.data.get_columns_mut() } {
+                        if s.name() == ca.name() {
+                            *s = ca.slice(0, s.len()).into_series();
+                            break;
+                        }
+                    }
                 }
             }
 

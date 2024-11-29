@@ -42,12 +42,11 @@ impl ToDummies for Series {
                         dummies_helper_slice(offset, len, self.len(), name)
                     },
                 };
-                ca.into_column()
+                ca.into_series()
             })
-            .collect::<Vec<_>>();
+            .collect();
 
-        // SAFETY: `dummies_helper` functions preserve `self.len()` length
-        unsafe { DataFrame::new_no_length_checks(sort_columns(columns)) }
+        Ok(unsafe { DataFrame::new_no_checks(sort_columns(columns)) })
     }
 }
 
@@ -78,7 +77,7 @@ fn dummies_helper_slice(
     ChunkedArray::from_vec(name, av)
 }
 
-fn sort_columns(mut columns: Vec<Column>) -> Vec<Column> {
+fn sort_columns(mut columns: Vec<Series>) -> Vec<Series> {
     columns.sort_by(|a, b| a.name().partial_cmp(b.name()).unwrap());
     columns
 }

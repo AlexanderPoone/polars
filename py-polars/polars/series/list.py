@@ -1,21 +1,20 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from polars import functions as F
 from polars._utils.wrap import wrap_s
 from polars.series.utils import expr_dispatch
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
     from datetime import date, datetime, time
 
     from polars import Expr, Series
     from polars._typing import (
         IntoExpr,
         IntoExprColumn,
-        ListToStructWidthStrategy,
         NullBehavior,
+        ToStructStrategy,
     )
     from polars.polars import PySeries
 
@@ -26,7 +25,7 @@ class ListNameSpace:
 
     _accessor = "list"
 
-    def __init__(self, series: Series) -> None:
+    def __init__(self, series: Series):
         self._s: PySeries = series._s
 
     def all(self) -> Series:
@@ -855,7 +854,7 @@ class ListNameSpace:
 
     def to_struct(
         self,
-        n_field_strategy: ListToStructWidthStrategy = "first_non_null",
+        n_field_strategy: ToStructStrategy = "first_non_null",
         fields: Callable[[int], str] | Sequence[str] | None = None,
     ) -> Series:
         """

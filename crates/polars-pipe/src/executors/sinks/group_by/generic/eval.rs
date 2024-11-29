@@ -1,8 +1,7 @@
 use std::cell::UnsafeCell;
 
-use polars_row::{RowEncodingOptions, RowsEncoded};
+use polars_row::{EncodingField, RowsEncoded};
 
-use self::row_encode::get_row_encoding_dictionary;
 use super::*;
 use crate::executors::sinks::group_by::utils::prepare_key;
 use crate::executors::sinks::utils::hash_rows;
@@ -18,7 +17,7 @@ pub(super) struct Eval {
     aggregation_series: UnsafeCell<Vec<Series>>,
     keys_columns: UnsafeCell<Vec<ArrayRef>>,
     hashes: Vec<u64>,
-    key_fields: Vec<RowEncodingOptions>,
+    key_fields: Vec<EncodingField>,
     // amortizes the encoding buffers
     rows_encoded: RowsEncoded,
 }
@@ -74,22 +73,20 @@ impl Eval {
             let s = s.to_physical_repr();
             aggregation_series.push(s.into_owned());
         }
-        let mut dicts = Vec::with_capacity(self.key_columns_expr.len());
         for phys_e in self.key_columns_expr.iter() {
             let s = phys_e.evaluate(chunk, &context.execution_state)?;
-            dicts.push(get_row_encoding_dictionary(s.dtype()));
-            let s = s.to_physical_repr().into_owned();
+            let s = match s.dtype() {
+                // todo! add binary to physical repr?
+                DataType::String => unsafe { s.cast_unchecked(&DataType::Binary).unwrap() },
+                _ => s.to_physical_repr().into_owned(),
+            };
             let s = prepare_key(&s, chunk);
             keys_columns.push(s.to_arrow(0, CompatLevel::newest()));
         }
 
         polars_row::convert_columns_amortized(
-            keys_columns[0].len(), // @NOTE: does not work for ZFS
             keys_columns,
-            self.key_fields
-                .iter()
-                .copied()
-                .zip(dicts.iter().map(|v| v.as_ref())),
+            &self.key_fields,
             &mut self.rows_encoded,
         );
         // drop the series, all data is in the rows encoding now

@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.xdist_group("streaming")
 
 
-@pytest.mark.may_fail_auto_streaming
 def test_streaming_categoricals_5921() -> None:
     with pl.StringCache():
         out_lazy = (
@@ -75,7 +74,6 @@ def test_streaming_streamable_functions(monkeypatch: Any, capfd: Any) -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.may_fail_auto_streaming
 def test_cross_join_stack() -> None:
     a = pl.Series(np.arange(100_000)).to_frame().lazy()
     t0 = time.time()

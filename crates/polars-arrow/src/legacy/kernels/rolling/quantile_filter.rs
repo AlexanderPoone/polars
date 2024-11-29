@@ -7,11 +7,11 @@ use std::ops::{Add, Div, Mul, Sub};
 use num_traits::NumCast;
 use polars_utils::index::{Bounded, Indexable, NullCount};
 use polars_utils::nulls::IsNull;
-use polars_utils::slice::SliceAble;
+use polars_utils::slice::{GetSaferUnchecked, SliceAble};
 use polars_utils::sort::arg_sort_ascending;
 use polars_utils::total_ord::TotalOrd;
 
-use crate::legacy::prelude::QuantileMethod;
+use crate::legacy::prelude::QuantileInterpolOptions;
 use crate::pushable::Pushable;
 use crate::types::NativeType;
 
@@ -32,7 +32,7 @@ struct Block<'a, A> {
     nulls_in_window: usize,
 }
 
-impl<A> Debug for Block<'_, A>
+impl<'a, A> Debug for Block<'a, A>
 where
     A: Indexable,
     A::Item: Debug + Copy,
@@ -130,15 +130,15 @@ where
         for &q in self.pi.iter() {
             // SAFETY: bounded by pi
             unsafe {
-                *self.next.get_unchecked_mut(p) = q;
-                *self.prev.get_unchecked_mut(q as usize) = p as u32;
+                *self.next.get_unchecked_release_mut(p) = q;
+                *self.prev.get_unchecked_release_mut(q as usize) = p as u32;
             }
 
             p = q as usize;
         }
         unsafe {
-            *self.next.get_unchecked_mut(p) = self.tail as u32;
-            *self.prev.get_unchecked_mut(self.tail) = p as u32;
+            *self.next.get_unchecked_release_mut(p) = self.tail as u32;
+            *self.prev.get_unchecked_release_mut(self.tail) = p as u32;
         }
     }
 
@@ -149,10 +149,12 @@ where
 
         *self
             .next
-            .get_unchecked_mut(*self.prev.get_unchecked(i) as usize) = *self.next.get_unchecked(i);
+            .get_unchecked_release_mut(*self.prev.get_unchecked_release(i) as usize) =
+            *self.next.get_unchecked_release(i);
         *self
             .prev
-            .get_unchecked_mut(*self.next.get_unchecked(i) as usize) = *self.prev.get_unchecked(i);
+            .get_unchecked_release_mut(*self.next.get_unchecked_release(i) as usize) =
+            *self.prev.get_unchecked_release(i);
     }
 
     unsafe fn undelete_link(&mut self, i: usize) {
@@ -162,10 +164,10 @@ where
 
         *self
             .next
-            .get_unchecked_mut(*self.prev.get_unchecked(i) as usize) = i as u32;
+            .get_unchecked_release_mut(*self.prev.get_unchecked_release(i) as usize) = i as u32;
         *self
             .prev
-            .get_unchecked_mut(*self.next.get_unchecked(i) as usize) = i as u32;
+            .get_unchecked_release_mut(*self.next.get_unchecked_release(i) as usize) = i as u32;
     }
 
     fn unwind(&mut self) {
@@ -192,18 +194,18 @@ where
             },
             -1 => {
                 self.current_index -= 1;
-                self.m = *self.prev.get_unchecked(self.m) as usize;
+                self.m = *self.prev.get_unchecked_release(self.m) as usize;
             },
             1 => self.advance(),
             i64::MIN..=0 => {
                 for _ in i..self.current_index {
-                    self.m = *self.prev.get_unchecked(self.m) as usize;
+                    self.m = *self.prev.get_unchecked_release(self.m) as usize;
                 }
                 self.current_index = i;
             },
             _ => {
                 for _ in self.current_index..i {
-                    self.m = *self.next.get_unchecked(self.m) as usize;
+                    self.m = *self.next.get_unchecked_release(self.m) as usize;
                 }
                 self.current_index = i;
             },
@@ -213,14 +215,14 @@ where
     fn reverse(&mut self) {
         if self.current_index > 0 {
             self.current_index -= 1;
-            self.m = unsafe { *self.prev.get_unchecked(self.m) as usize };
+            self.m = unsafe { *self.prev.get_unchecked_release(self.m) as usize };
         }
     }
 
     fn advance(&mut self) {
         if self.current_index < self.n_element {
             self.current_index += 1;
-            self.m = unsafe { *self.next.get_unchecked(self.m) as usize };
+            self.m = unsafe { *self.next.get_unchecked_release(self.m) as usize };
         }
     }
 
@@ -260,20 +262,20 @@ where
                 // 1, 2, [4], 5
                 // go to next position because the link was deleted
                 if self.n_element >= self.current_index {
-                    let next_m = *self.next.get_unchecked(self.m) as usize;
+                    let next_m = *self.next.get_unchecked_release(self.m) as usize;
 
                     if next_m == self.tail && self.n_element > 0 {
                         // The index points to tail,  set the index in the array again.
                         self.current_index -= 1;
-                        self.m = *self.prev.get_unchecked(self.m) as usize
+                        self.m = *self.prev.get_unchecked_release(self.m) as usize
                     } else {
-                        self.m = *self.next.get_unchecked(self.m) as usize;
+                        self.m = *self.next.get_unchecked_release(self.m) as usize;
                     }
                 } else {
                     // move to previous position because the link was deleted
                     // 1, [2],
                     // [1]
-                    self.m = *self.prev.get_unchecked(self.m) as usize
+                    self.m = *self.prev.get_unchecked_release(self.m) as usize
                 }
             },
         };
@@ -441,7 +443,7 @@ where
     }
 }
 
-impl<A> LenGet for BlockUnion<'_, A>
+impl<'a, A> LenGet for BlockUnion<'a, A>
 where
     A: Indexable + Bounded + NullCount + Clone,
     <A as Indexable>::Item: TotalOrd + Copy + Debug,
@@ -571,7 +573,7 @@ struct QuantileUpdate<M: LenGet> {
     inner: M,
     quantile: f64,
     min_periods: usize,
-    method: QuantileMethod,
+    interpol: QuantileInterpolOptions,
 }
 
 impl<M> QuantileUpdate<M>
@@ -579,12 +581,12 @@ where
     M: LenGet,
     <M as LenGet>::Item: Default + IsNull + Copy + FinishLinear + Debug,
 {
-    fn new(method: QuantileMethod, min_periods: usize, quantile: f64, inner: M) -> Self {
+    fn new(interpol: QuantileInterpolOptions, min_periods: usize, quantile: f64, inner: M) -> Self {
         Self {
             min_periods,
             quantile,
             inner,
-            method,
+            interpol,
         }
     }
 
@@ -600,8 +602,8 @@ where
 
         let valid_length_f = valid_length as f64;
 
-        use QuantileMethod::*;
-        match self.method {
+        use QuantileInterpolOptions::*;
+        match self.interpol {
             Linear => {
                 let float_idx_top = (valid_length_f - 1.0) * self.quantile;
                 let idx = float_idx_top.floor() as usize;
@@ -619,10 +621,6 @@ where
             Nearest => {
                 let idx = (valid_length_f * self.quantile) as usize;
                 let idx = std::cmp::min(idx, valid_length - 1);
-                self.inner.get(idx + null_count)
-            },
-            Equiprobable => {
-                let idx = ((valid_length_f * self.quantile).ceil() - 1.0).max(0.0) as usize;
                 self.inner.get(idx + null_count)
             },
             Midpoint => {
@@ -653,7 +651,7 @@ where
 }
 
 pub(super) fn rolling_quantile<A, Out: Pushable<<A as Indexable>::Item>>(
-    method: QuantileMethod,
+    interpol: QuantileInterpolOptions,
     min_periods: usize,
     k: usize,
     values: A,
@@ -711,7 +709,7 @@ where
         // SAFETY: bounded by capacity
         unsafe { block_left.undelete(i) };
 
-        let mut mu = QuantileUpdate::new(method, min_periods, quantile, &mut block_left);
+        let mut mu = QuantileUpdate::new(interpol, min_periods, quantile, &mut block_left);
         out.push(mu.quantile());
     }
     for i in 1..n_blocks + 1 {
@@ -749,7 +747,7 @@ where
                 let mut union = BlockUnion::new(&mut *ptr_left, &mut *ptr_right);
                 union.set_state(j);
                 let q: <A as Indexable>::Item =
-                    QuantileUpdate::new(method, min_periods, quantile, union).quantile();
+                    QuantileUpdate::new(interpol, min_periods, quantile, union).quantile();
                 out.push(q);
             }
         }
@@ -1064,22 +1062,22 @@ mod test {
             2.0, 8.0, 5.0, 9.0, 1.0, 2.0, 4.0, 2.0, 4.0, 8.1, -1.0, 2.9, 1.2, 23.0,
         ]
         .as_ref();
-        let out: Vec<_> = rolling_quantile(QuantileMethod::Linear, 0, 3, values, 0.5);
+        let out: Vec<_> = rolling_quantile(QuantileInterpolOptions::Linear, 0, 3, values, 0.5);
         let expected = [
             2.0, 5.0, 5.0, 8.0, 5.0, 2.0, 2.0, 2.0, 4.0, 4.0, 4.0, 2.9, 1.2, 2.9,
         ];
         assert_eq!(out, expected);
-        let out: Vec<_> = rolling_quantile(QuantileMethod::Linear, 0, 5, values, 0.5);
+        let out: Vec<_> = rolling_quantile(QuantileInterpolOptions::Linear, 0, 5, values, 0.5);
         let expected = [
             2.0, 5.0, 5.0, 6.5, 5.0, 5.0, 4.0, 2.0, 2.0, 4.0, 4.0, 2.9, 2.9, 2.9,
         ];
         assert_eq!(out, expected);
-        let out: Vec<_> = rolling_quantile(QuantileMethod::Linear, 0, 7, values, 0.5);
+        let out: Vec<_> = rolling_quantile(QuantileInterpolOptions::Linear, 0, 7, values, 0.5);
         let expected = [
             2.0, 5.0, 5.0, 6.5, 5.0, 3.5, 4.0, 4.0, 4.0, 4.0, 2.0, 2.9, 2.9, 2.9,
         ];
         assert_eq!(out, expected);
-        let out: Vec<_> = rolling_quantile(QuantileMethod::Linear, 0, 4, values, 0.5);
+        let out: Vec<_> = rolling_quantile(QuantileInterpolOptions::Linear, 0, 4, values, 0.5);
         let expected = [
             2.0, 5.0, 5.0, 6.5, 6.5, 3.5, 3.0, 2.0, 3.0, 4.0, 3.0, 3.45, 2.05, 2.05,
         ];
@@ -1089,7 +1087,7 @@ mod test {
     #[test]
     fn test_median_2() {
         let values = [10, 10, 15, 13, 9, 5, 3, 13, 19, 15, 19].as_ref();
-        let out: Vec<_> = rolling_quantile(QuantileMethod::Linear, 0, 3, values, 0.5);
+        let out: Vec<_> = rolling_quantile(QuantileInterpolOptions::Linear, 0, 3, values, 0.5);
         let expected = [10, 10, 10, 13, 13, 9, 5, 5, 13, 15, 19];
         assert_eq!(out, expected);
     }

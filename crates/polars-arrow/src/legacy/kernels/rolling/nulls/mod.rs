@@ -20,7 +20,7 @@ pub trait RollingAggWindowNulls<'a, T: NativeType> {
         validity: &'a Bitmap,
         start: usize,
         end: usize,
-        params: Option<RollingFnParams>,
+        params: DynArgs,
     ) -> Self;
 
     /// # Safety
@@ -37,7 +37,7 @@ pub(super) fn rolling_apply_agg_window<'a, Agg, T, Fo>(
     window_size: usize,
     min_periods: usize,
     det_offsets_fn: Fo,
-    params: Option<RollingFnParams>,
+    params: DynArgs,
 ) -> ArrayRef
 where
     Fo: Fn(Idx, WindowSize, Len) -> (Start, End) + Copy,
@@ -175,7 +175,7 @@ mod test {
 
         assert_eq!(out, &[0.0, 0.0, 2.0, 12.5]);
 
-        let testpars = Some(RollingFnParams::Var(RollingVarParams { ddof: 0 }));
+        let testpars = Some(Arc::new(RollingVarParams { ddof: 0 }) as Arc<dyn Any + Send + Sync>);
         let out = rolling_var(arr, 3, 1, false, None, testpars.clone());
         let out = out.as_any().downcast_ref::<PrimitiveArray<f64>>().unwrap();
         let out = out

@@ -7,14 +7,14 @@ use arrow::bitmap::MutableBitmap;
 use arrow::datatypes::ArrowSchemaRef;
 use polars_core::chunked_array::builder::NullChunkedBuilder;
 use polars_core::prelude::*;
-use polars_core::series::IsSorted;
 use polars_core::utils::{accumulate_dataframes_vertical, split_df};
-use polars_core::{config, POOL};
+use polars_core::POOL;
 use polars_parquet::parquet::error::ParquetResult;
 use polars_parquet::parquet::statistics::Statistics;
 use polars_parquet::read::{
     self, ColumnChunkMetadata, FileMetadata, Filter, PhysicalType, RowGroupMetadata,
 };
+use polars_utils::mmap::MemSlice;
 use rayon::prelude::*;
 
 #[cfg(feature = "cloud")]
@@ -24,7 +24,7 @@ use super::predicates::read_this_row_group;
 use super::to_metadata::ToMetadata;
 use super::utils::materialize_empty_df;
 use super::{mmap, ParallelStrategy};
-use crate::hive::{self, materialize_hive_partitions};
+use crate::hive::materialize_hive_partitions;
 use crate::mmap::{MmapBytesReader, ReaderBytes};
 use crate::parquet::metadata::FileMetadataRef;
 use crate::parquet::read::ROW_COUNT_OVERFLOW_ERR;
@@ -43,9 +43,6 @@ fn assert_dtypes(dtype: &ArrowDataType) {
         // These should all be casted to the BinaryView / Utf8View variants
         D::Utf8 | D::Binary | D::LargeUtf8 | D::LargeBinary => unreachable!(),
 
-        // These should be casted to Float32
-        D::Float16 => unreachable!(),
-
         // This should have been converted to a LargeList
         D::List(_) => unreachable!(),
 
@@ -63,57 +60,6 @@ fn assert_dtypes(dtype: &ArrowDataType) {
     }
 }
 
-fn should_copy_sortedness(dtype: &DataType) -> bool {
-    // @NOTE: For now, we are a bit conservative with this.
-    use DataType as D;
-
-    matches!(
-        dtype,
-        D::Int8 | D::Int16 | D::Int32 | D::Int64 | D::UInt8 | D::UInt16 | D::UInt32 | D::UInt64
-    )
-}
-
-pub fn try_set_sorted_flag(
-    series: &mut Series,
-    col_idx: usize,
-    sorting_map: &PlHashMap<usize, IsSorted>,
-) {
-    if let Some(is_sorted) = sorting_map.get(&col_idx) {
-        if should_copy_sortedness(series.dtype()) {
-            if config::verbose() {
-                eprintln!(
-                    "Parquet conserved SortingColumn for column chunk of '{}' to {is_sorted:?}",
-                    series.name()
-                );
-            }
-
-            series.set_sorted_flag(*is_sorted);
-        }
-    }
-}
-
-pub fn create_sorting_map(md: &RowGroupMetadata) -> PlHashMap<usize, IsSorted> {
-    let capacity = md.sorting_columns().map_or(0, |s| s.len());
-    let mut sorting_map = PlHashMap::with_capacity(capacity);
-
-    if let Some(sorting_columns) = md.sorting_columns() {
-        for sorting in sorting_columns {
-            let prev_value = sorting_map.insert(
-                sorting.column_idx as usize,
-                if sorting.descending {
-                    IsSorted::Descending
-                } else {
-                    IsSorted::Ascending
-                },
-            );
-
-            debug_assert!(prev_value.is_none());
-        }
-    }
-
-    sorting_map
-}
-
 fn column_idx_to_series(
     column_i: usize,
     // The metadata belonging to this column
@@ -122,8 +68,6 @@ fn column_idx_to_series(
     file_schema: &ArrowSchema,
     store: &mmap::ColumnStore,
 ) -> PolarsResult<Series> {
-    let did_filter = filter.is_some();
-
     let field = file_schema.get_at_index(column_i).unwrap().1;
 
     #[cfg(debug_assertions)]
@@ -145,11 +89,6 @@ fn column_idx_to_series(
             return Ok(series)
         },
         _ => {},
-    }
-
-    // We cannot trust the statistics if we filtered the parquet already.
-    if did_filter {
-        return Ok(series);
     }
 
     // See if we can find some statistics for this series. If we cannot find anything just return
@@ -212,23 +151,17 @@ fn rg_to_dfs(
     use_statistics: bool,
     hive_partition_columns: Option<&[Series]>,
 ) -> PolarsResult<Vec<DataFrame>> {
-    if config::verbose() {
-        eprintln!("parquet scan with parallel = {parallel:?}");
-    }
-
     // If we are only interested in the row_index, we take a little special path here.
     if projection.is_empty() {
         if let Some(row_index) = row_index {
             let placeholder =
                 NullChunkedBuilder::new(PlSmallStr::from_static("__PL_TMP"), slice.1).finish();
-            return Ok(vec![DataFrame::new(vec![placeholder
-                .into_series()
-                .into_column()])?
-            .with_row_index(
-                row_index.name.clone(),
-                Some(row_index.offset + IdxSize::try_from(slice.0).unwrap()),
-            )?
-            .select(std::iter::once(row_index.name))?]);
+            return Ok(vec![DataFrame::new(vec![placeholder.into_series()])?
+                .with_row_index(
+                    row_index.name.clone(),
+                    Some(row_index.offset + IdxSize::try_from(slice.0).unwrap()),
+                )?
+                .select(std::iter::once(row_index.name))?]);
         }
     }
 
@@ -288,18 +221,6 @@ fn rg_to_dfs(
     }
 }
 
-/// Load several Parquet row groups as DataFrames while filtering predicate items.
-///
-/// This strategy works as follows:
-///
-/// ```text
-/// For each Row Group:
-///     1. Skip this row group if statistics already filter it out
-///     2. Load all the data for the columns needed for the predicate (i.e. the live columns)
-///     3. Create a predicate mask.
-///     4. Load the filtered data for the columns not in the predicate (i.e. the dead columns)
-///     5. Merge the columns into the right DataFrame
-/// ```
 #[allow(clippy::too_many_arguments)]
 fn rg_to_dfs_prefiltered(
     store: &mmap::ColumnStore,
@@ -343,12 +264,7 @@ fn rg_to_dfs_prefiltered(
 
     // Get the number of live columns
     let num_live_columns = live_variables.len();
-    let num_dead_columns =
-        projection.len() + hive_partition_columns.map_or(0, |x| x.len()) - num_live_columns;
-
-    if config::verbose() {
-        eprintln!("parquet live columns = {num_live_columns}, dead columns = {num_dead_columns}");
-    }
+    let num_dead_columns = projection.len() - num_live_columns;
 
     // @NOTE: This is probably already sorted, but just to be sure.
     let mut projection_sorted = projection.to_vec();
@@ -356,22 +272,40 @@ fn rg_to_dfs_prefiltered(
 
     // We create two look-up tables that map indexes offsets into the live- and dead-set onto
     // column indexes of the schema.
-    // Note: This may contain less than `num_live_columns` if there are hive columns involved.
     let mut live_idx_to_col_idx = Vec::with_capacity(num_live_columns);
     let mut dead_idx_to_col_idx = Vec::with_capacity(num_dead_columns);
-    for &i in projection_sorted.iter() {
-        let name = schema.get_at_index(i).unwrap().0.as_str();
+    let mut offset = 0;
+    for (i, field) in schema.iter_values().enumerate() {
+        if projection_sorted.get(offset).copied() != Some(i) {
+            continue;
+        }
 
-        if live_variables.contains(name) {
+        offset += 1;
+        if live_variables.contains(&field.name[..]) {
             live_idx_to_col_idx.push(i);
         } else {
             dead_idx_to_col_idx.push(i);
         }
     }
 
-    let mask_setting = PrefilterMaskSetting::init_from_env();
+    debug_assert_eq!(live_idx_to_col_idx.len(), num_live_columns);
+    debug_assert_eq!(dead_idx_to_col_idx.len(), num_dead_columns);
 
-    let dfs: Vec<Option<DataFrame>> = POOL.install(move || {
+    enum MaskSetting {
+        Auto,
+        Pre,
+        Post,
+    }
+
+    let mask_setting =
+        std::env::var("POLARS_PQ_PREFILTERED_MASK").map_or(MaskSetting::Auto, |v| match &v[..] {
+            "auto" => MaskSetting::Auto,
+            "pre" => MaskSetting::Pre,
+            "post" => MaskSetting::Post,
+            _ => panic!("Invalid `POLARS_PQ_PREFILTERED_MASK` value '{v}'."),
+        });
+
+    let dfs: Vec<Option<DataFrame>> = POOL.install(|| {
         // Set partitioned fields to prevent quadratic behavior.
         // Ensure all row groups are partitioned.
 
@@ -388,38 +322,24 @@ fn rg_to_dfs_prefiltered(
                     }
                 }
 
-                let sorting_map = create_sorting_map(md);
-
                 // Collect the data for the live columns
-                let live_columns = (0..live_idx_to_col_idx.len())
+                let live_columns = (0..num_live_columns)
                     .into_par_iter()
                     .map(|i| {
                         let col_idx = live_idx_to_col_idx[i];
 
-                        let (name, field) = schema.get_at_index(col_idx).unwrap();
+                        let name = schema.get_at_index(col_idx).unwrap().0;
+                        let field_md = file_metadata.row_groups[rg_idx]
+                            .columns_under_root_iter(name)
+                            .collect::<Vec<_>>();
 
-                        let Some(iter) = md.columns_under_root_iter(name) else {
-                            return Ok(Column::full_null(
-                                name.clone(),
-                                md.num_rows(),
-                                &DataType::from_arrow(&field.dtype, true),
-                            ));
-                        };
-
-                        let part = iter.collect::<Vec<_>>();
-
-                        let mut series =
-                            column_idx_to_series(col_idx, part.as_slice(), None, schema, store)?;
-
-                        try_set_sorted_flag(&mut series, col_idx, &sorting_map);
-
-                        Ok(series.into_column())
+                        column_idx_to_series(col_idx, field_md.as_slice(), None, schema, store)
                     })
                     .collect::<PolarsResult<Vec<_>>>()?;
 
                 // Apply the predicate to the live columns and save the dataframe and the bitmask
                 let md = &file_metadata.row_groups[rg_idx];
-                let mut df = unsafe { DataFrame::new_no_checks(md.num_rows(), live_columns) };
+                let mut df = unsafe { DataFrame::new_no_checks(live_columns) };
 
                 materialize_hive_partitions(
                     &mut df,
@@ -453,46 +373,53 @@ fn rg_to_dfs_prefiltered(
                 debug_assert_eq!(df.height(), filter_mask.set_bits());
 
                 if filter_mask.set_bits() == 0 {
-                    if config::verbose() {
-                        eprintln!("parquet filter mask found that row group can be skipped");
-                    }
-
                     return Ok(None);
                 }
 
                 // We don't need to do any further work if there are no dead columns
-                if dead_idx_to_col_idx.is_empty() {
+                if num_dead_columns == 0 {
                     return Ok(Some(df));
                 }
 
-                let prefilter_cost = matches!(mask_setting, PrefilterMaskSetting::Auto)
-                    .then(|| calc_prefilter_cost(&filter_mask))
+                let prefilter_cost = matches!(mask_setting, MaskSetting::Auto)
+                    .then(|| {
+                        let num_edges = filter_mask.num_edges() as f64;
+                        let rg_len = filter_mask.len() as f64;
+
+                        // @GB: I did quite some analysis on this.
+                        //
+                        // Pre-filtered and Post-filtered can both be faster in certain scenarios.
+                        //
+                        // - Pre-filtered is faster when there is some amount of clustering or
+                        // sorting involved or if the number of values selected is small.
+                        // - Post-filtering is faster when the predicate selects a somewhat random
+                        // elements throughout the row group.
+                        //
+                        // The following is a heuristic value to try and estimate which one is
+                        // faster. Essentially, it sees how many times it needs to switch between
+                        // skipping items and collecting items and compares it against the number
+                        // of values that it will collect.
+                        //
+                        // Closer to 0: pre-filtering is probably better.
+                        // Closer to 1: post-filtering is probably better.
+                        (num_edges / rg_len).clamp(0.0, 1.0)
+                    })
                     .unwrap_or_default();
 
-                #[cfg(debug_assertions)]
-                {
-                    let md = &file_metadata.row_groups[rg_idx];
-                    debug_assert_eq!(md.num_rows(), mask.len());
-                }
-
-                let n_rows_in_result = filter_mask.set_bits();
-
-                let dead_columns = (0..dead_idx_to_col_idx.len())
+                let rg_columns = (0..num_dead_columns)
                     .into_par_iter()
                     .map(|i| {
                         let col_idx = dead_idx_to_col_idx[i];
+                        let name = schema.get_at_index(col_idx).unwrap().0;
 
-                        let (name, field) = schema.get_at_index(col_idx).unwrap();
-
-                        let Some(iter) = md.columns_under_root_iter(name) else {
-                            return Ok(Column::full_null(
-                                name.clone(),
-                                n_rows_in_result,
-                                &DataType::from_arrow(&field.dtype, true),
-                            ));
-                        };
-
-                        let field_md = iter.collect::<Vec<_>>();
+                        #[cfg(debug_assertions)]
+                        {
+                            let md = &file_metadata.row_groups[rg_idx];
+                            debug_assert_eq!(md.num_rows(), mask.len());
+                        }
+                        let field_md = file_metadata.row_groups[rg_idx]
+                            .columns_under_root_iter(name)
+                            .collect::<Vec<_>>();
 
                         let pre = || {
                             column_idx_to_series(
@@ -523,55 +450,42 @@ fn rg_to_dfs_prefiltered(
                             array.filter(&mask_arr)
                         };
 
-                        let mut series = if mask_setting.should_prefilter(
-                            prefilter_cost,
-                            &schema.get_at_index(col_idx).unwrap().1.dtype,
-                        ) {
-                            pre()?
-                        } else {
-                            post()?
+                        let array = match mask_setting {
+                            MaskSetting::Auto => {
+                                // Prefiltering is more expensive for nested types so we make the cut-off
+                                // higher.
+                                let is_nested =
+                                    schema.get_at_index(col_idx).unwrap().1.dtype.is_nested();
+
+                                // We empirically selected these numbers.
+                                let do_prefilter = (is_nested && prefilter_cost <= 0.01)
+                                    || (!is_nested && prefilter_cost <= 0.02);
+
+                                if do_prefilter {
+                                    pre()?
+                                } else {
+                                    post()?
+                                }
+                            },
+                            MaskSetting::Pre => pre()?,
+                            MaskSetting::Post => post()?,
                         };
 
-                        debug_assert_eq!(series.len(), filter_mask.set_bits());
+                        debug_assert_eq!(array.len(), filter_mask.set_bits());
 
-                        try_set_sorted_flag(&mut series, col_idx, &sorting_map);
-
-                        Ok(series.into_column())
+                        Ok(array)
                     })
-                    .collect::<PolarsResult<Vec<Column>>>()?;
+                    .collect::<PolarsResult<Vec<Series>>>()?;
 
-                debug_assert!(dead_columns.iter().all(|v| v.len() == df.height()));
+                let mut rearranged_schema = df.schema();
+                rearranged_schema.merge(Schema::from_arrow_schema(schema.as_ref()));
 
-                let height = df.height();
-                let live_columns = df.take_columns();
+                debug_assert!(rg_columns.iter().all(|v| v.len() == df.height()));
 
-                assert_eq!(
-                    live_columns.len() + dead_columns.len(),
-                    projection_sorted.len() + hive_partition_columns.map_or(0, |x| x.len())
-                );
-
-                let mut merged = Vec::with_capacity(live_columns.len() + dead_columns.len());
-
-                // * All hive columns are always in `live_columns` if there are any.
-                // * `materialize_hive_partitions()` guarantees `live_columns` is sorted by their appearance in `reader_schema`.
-
-                // We re-use `hive::merge_sorted_to_schema_order()` as it performs most of the merge operation we want.
-                // But we take out the `row_index` column as it isn't on the right side.
-
-                if row_index.is_some() {
-                    merged.push(live_columns[0].clone());
-                };
-
-                hive::merge_sorted_to_schema_order(
-                    &mut dead_columns.into_iter(), // df_columns
-                    &mut live_columns.into_iter().skip(row_index.is_some() as usize), // hive_columns
-                    schema,
-                    &mut merged,
-                );
-
-                // SAFETY: This is completely based on the schema so all column names are unique
-                // and the length is given by the parquet file which should always be the same.
-                let df = unsafe { DataFrame::new_no_checks(height, merged) };
+                // We first add the columns with the live columns at the start. Then, we do a
+                // projections that puts the columns at the right spot.
+                df._add_columns(rg_columns, &rearranged_schema)?;
+                let df = df.select(schema.iter_names_cloned())?;
 
                 PolarsResult::Ok(Some(df))
             })
@@ -632,36 +546,21 @@ fn rg_to_dfs_optionally_par_over_columns(
             assert!(std::env::var("POLARS_PANIC_IF_PARQUET_PARSED").is_err())
         }
 
-        let sorting_map = create_sorting_map(md);
-
         let columns = if let ParallelStrategy::Columns = parallel {
             POOL.install(|| {
                 projection
                     .par_iter()
                     .map(|column_i| {
-                        let (name, field) = schema.get_at_index(*column_i).unwrap();
+                        let name = schema.get_at_index(*column_i).unwrap().0;
+                        let part = md.columns_under_root_iter(name).collect::<Vec<_>>();
 
-                        let Some(iter) = md.columns_under_root_iter(name) else {
-                            return Ok(Column::full_null(
-                                name.clone(),
-                                rg_slice.1,
-                                &DataType::from_arrow(&field.dtype, true),
-                            ));
-                        };
-
-                        let part = iter.collect::<Vec<_>>();
-
-                        let mut series = column_idx_to_series(
+                        column_idx_to_series(
                             *column_i,
                             part.as_slice(),
                             Some(Filter::new_ranged(rg_slice.0, rg_slice.0 + rg_slice.1)),
                             schema,
                             store,
-                        )?;
-
-                        try_set_sorted_flag(&mut series, *column_i, &sorting_map);
-
-                        Ok(series.into_column())
+                        )
                     })
                     .collect::<PolarsResult<Vec<_>>>()
             })?
@@ -669,39 +568,23 @@ fn rg_to_dfs_optionally_par_over_columns(
             projection
                 .iter()
                 .map(|column_i| {
-                    let (name, field) = schema.get_at_index(*column_i).unwrap();
+                    let name = schema.get_at_index(*column_i).unwrap().0;
+                    let part = md.columns_under_root_iter(name).collect::<Vec<_>>();
 
-                    let Some(iter) = md.columns_under_root_iter(name) else {
-                        return Ok(Column::full_null(
-                            name.clone(),
-                            rg_slice.1,
-                            &DataType::from_arrow(&field.dtype, true),
-                        ));
-                    };
-
-                    let part = iter.collect::<Vec<_>>();
-
-                    let mut series = column_idx_to_series(
+                    column_idx_to_series(
                         *column_i,
                         part.as_slice(),
                         Some(Filter::new_ranged(rg_slice.0, rg_slice.0 + rg_slice.1)),
                         schema,
                         store,
-                    )?;
-
-                    try_set_sorted_flag(&mut series, *column_i, &sorting_map);
-
-                    Ok(series.into_column())
+                    )
                 })
                 .collect::<PolarsResult<Vec<_>>>()?
         };
 
-        let mut df = unsafe { DataFrame::new_no_checks(rg_slice.1, columns) };
+        let mut df = unsafe { DataFrame::new_no_checks(columns) };
         if let Some(rc) = &row_index {
-            df.with_row_index_mut(
-                rc.name.clone(),
-                Some(*previous_row_count + rc.offset + rg_slice.0 as IdxSize),
-            );
+            df.with_row_index_mut(rc.name.clone(), Some(*previous_row_count + rc.offset));
         }
 
         materialize_hive_partitions(&mut df, schema.as_ref(), hive_partition_columns, rg_slice.1);
@@ -761,7 +644,7 @@ fn rg_to_dfs_par_over_rg(
             continue;
         }
 
-        row_groups.push((rg_md, rg_slice, row_count_start));
+        row_groups.push((i, rg_md, rg_slice, row_count_start));
     }
 
     let dfs = POOL.install(|| {
@@ -769,7 +652,10 @@ fn rg_to_dfs_par_over_rg(
         // Ensure all row groups are partitioned.
         row_groups
             .into_par_iter()
-            .map(|(md, slice, row_count_start)| {
+            .enumerate()
+            .map(|(iter_idx, (_rg_idx, _md, slice, row_count_start))| {
+                let md = &file_metadata.row_groups[iter_idx];
+
                 if slice.1 == 0 || use_statistics && !read_this_row_group(predicate, md, schema)? {
                     return Ok(None);
                 }
@@ -779,43 +665,28 @@ fn rg_to_dfs_par_over_rg(
                     assert!(std::env::var("POLARS_PANIC_IF_PARQUET_PARSED").is_err())
                 }
 
-                let sorting_map = create_sorting_map(md);
-
                 let columns = projection
                     .iter()
                     .map(|column_i| {
-                        let (name, field) = schema.get_at_index(*column_i).unwrap();
+                        let name = schema.get_at_index(*column_i).unwrap().0;
+                        let field_md = md.columns_under_root_iter(name).collect::<Vec<_>>();
 
-                        let Some(iter) = md.columns_under_root_iter(name) else {
-                            return Ok(Column::full_null(
-                                name.clone(),
-                                md.num_rows(),
-                                &DataType::from_arrow(&field.dtype, true),
-                            ));
-                        };
-
-                        let part = iter.collect::<Vec<_>>();
-
-                        let mut series = column_idx_to_series(
+                        column_idx_to_series(
                             *column_i,
-                            part.as_slice(),
+                            field_md.as_slice(),
                             Some(Filter::new_ranged(slice.0, slice.0 + slice.1)),
                             schema,
                             store,
-                        )?;
-
-                        try_set_sorted_flag(&mut series, *column_i, &sorting_map);
-
-                        Ok(series.into_column())
+                        )
                     })
                     .collect::<PolarsResult<Vec<_>>>()?;
 
-                let mut df = unsafe { DataFrame::new_no_checks(slice.1, columns) };
+                let mut df = unsafe { DataFrame::new_no_checks(columns) };
 
                 if let Some(rc) = &row_index {
                     df.with_row_index_mut(
                         rc.name.clone(),
-                        Some(row_count_start as IdxSize + rc.offset + slice.0 as IdxSize),
+                        Some(row_count_start as IdxSize + rc.offset),
                     );
                 }
 
@@ -883,19 +754,10 @@ pub fn read_parquet<R: MmapBytesReader>(
         .unwrap_or_else(|| Cow::Owned((0usize..reader_schema.len()).collect::<Vec<_>>()));
 
     if let Some(predicate) = predicate {
-        let prefilter_env = std::env::var("POLARS_PARQUET_PREFILTER");
-        let prefilter_env = prefilter_env.as_deref();
-
-        let num_live_variables = predicate.live_variables().map_or(0, |v| v.len());
-        let mut do_prefilter = false;
-
-        do_prefilter |= prefilter_env == Ok("1"); // Force enable
-        do_prefilter |= num_live_variables * n_row_groups >= POOL.current_num_threads()
-            && materialized_projection.len() >= num_live_variables;
-
-        do_prefilter &= prefilter_env != Ok("0"); // Force disable
-
-        if do_prefilter {
+        if std::env::var("POLARS_PARQUET_AUTO_PREFILTERED").is_ok_and(|v| v == "1")
+            && predicate.live_variables().map_or(0, |v| v.len()) * n_row_groups
+                >= POOL.current_num_threads()
+        {
             parallel = ParallelStrategy::Prefiltered;
         }
     }
@@ -913,9 +775,10 @@ pub fn read_parquet<R: MmapBytesReader>(
     }
 
     let reader = ReaderBytes::from(&mut reader);
-    let store = mmap::ColumnStore::Local(unsafe {
-        std::mem::transmute::<ReaderBytes<'_>, ReaderBytes<'static>>(reader).to_memslice()
-    });
+    let store = mmap::ColumnStore::Local(
+        unsafe { std::mem::transmute::<ReaderBytes<'_>, ReaderBytes<'static>>(reader) }
+            .into_mem_slice(),
+    );
 
     let dfs = rg_to_dfs(
         &store,
@@ -963,7 +826,9 @@ impl FetchRowGroupsFromMmapReader {
 
     fn fetch_row_groups(&mut self, _row_groups: Range<usize>) -> PolarsResult<ColumnStore> {
         // @TODO: we can something smarter here with mmap
-        Ok(mmap::ColumnStore::Local(self.0.to_memslice()))
+        Ok(mmap::ColumnStore::Local(MemSlice::from_vec(
+            self.0.deref().to_vec(),
+        )))
     }
 }
 
@@ -1134,7 +999,6 @@ impl BatchedParquetReader {
         self.row_group_offset + n > self.n_row_groups
     }
 
-    #[cfg(feature = "async")]
     pub async fn next_batches(&mut self, n: usize) -> PolarsResult<Option<Vec<DataFrame>>> {
         if self.rows_read as usize == self.slice.0 + self.slice.1 && self.has_returned {
             return if self.chunks_fifo.is_empty() {
@@ -1165,47 +1029,79 @@ impl BatchedParquetReader {
                 .fetch_row_groups(row_group_range.clone())
                 .await?;
 
-            let mut dfs = {
-                // Spawn the decoding and decompression of the bytes on a rayon task.
-                // This will ensure we don't block the async thread.
+            let mut dfs = match store {
+                ColumnStore::Local(_) => rg_to_dfs(
+                    &store,
+                    &mut self.rows_read,
+                    row_group_range.start,
+                    row_group_range.end,
+                    self.slice,
+                    &self.metadata,
+                    &self.schema,
+                    self.predicate.as_deref(),
+                    self.row_index.clone(),
+                    self.parallel,
+                    &self.projection,
+                    self.use_statistics,
+                    self.hive_partition_columns.as_deref(),
+                ),
+                #[cfg(feature = "async")]
+                ColumnStore::Fetched(b) => {
+                    // This branch we spawn the decoding and decompression of the bytes on a rayon task.
+                    // This will ensure we don't block the async thread.
 
-                // Make everything 'static.
-                let mut rows_read = self.rows_read;
-                let row_index = self.row_index.clone();
-                let predicate = self.predicate.clone();
-                let schema = self.schema.clone();
-                let metadata = self.metadata.clone();
-                let parallel = self.parallel;
-                let projection = self.projection.clone();
-                let use_statistics = self.use_statistics;
-                let hive_partition_columns = self.hive_partition_columns.clone();
-                let slice = self.slice;
+                    // Reconstruct as that makes it a 'static.
+                    let store = ColumnStore::Fetched(b);
+                    let (tx, rx) = tokio::sync::oneshot::channel();
 
-                let func = move || {
-                    let dfs = rg_to_dfs(
-                        &store,
-                        &mut rows_read,
-                        row_group_range.start,
-                        row_group_range.end,
-                        slice,
-                        &metadata,
-                        &schema,
-                        predicate.as_deref(),
-                        row_index,
-                        parallel,
-                        &projection,
-                        use_statistics,
-                        hive_partition_columns.as_deref(),
-                    );
+                    // Make everything 'static.
+                    let mut rows_read = self.rows_read;
+                    let row_index = self.row_index.clone();
+                    let predicate = self.predicate.clone();
+                    let schema = self.schema.clone();
+                    let metadata = self.metadata.clone();
+                    let parallel = self.parallel;
+                    let projection = self.projection.clone();
+                    let use_statistics = self.use_statistics;
+                    let hive_partition_columns = self.hive_partition_columns.clone();
+                    let slice = self.slice;
 
-                    dfs.map(|x| (x, rows_read))
-                };
+                    let f = move || {
+                        let dfs = rg_to_dfs(
+                            &store,
+                            &mut rows_read,
+                            row_group_range.start,
+                            row_group_range.end,
+                            slice,
+                            &metadata,
+                            &schema,
+                            predicate.as_deref(),
+                            row_index,
+                            parallel,
+                            &projection,
+                            use_statistics,
+                            hive_partition_columns.as_deref(),
+                        );
 
-                let (dfs, rows_read) = crate::pl_async::get_runtime().spawn_rayon(func).await?;
+                        // Don't unwrap send attempt - async task could be cancelled.
+                        let _ = tx.send((dfs, rows_read));
+                    };
 
-                self.rows_read = rows_read;
-                dfs
-            };
+                    // Spawn the task and wait on it asynchronously.
+                    if POOL.current_thread_index().is_some() {
+                        // We are a rayon thread, so we can't use POOL.spawn as it would mean we spawn a task and block until
+                        // another rayon thread executes it - we would deadlock if all rayon threads did this.
+                        // Safety: The tokio runtime flavor is multi-threaded.
+                        tokio::task::block_in_place(f);
+                    } else {
+                        POOL.spawn(f);
+                    };
+
+                    let (dfs, rows_read) = rx.await.unwrap();
+                    self.rows_read = rows_read;
+                    dfs
+                },
+            }?;
 
             if let Some(ca) = self.include_file_path.as_mut() {
                 let mut max_len = 0;
@@ -1234,7 +1130,7 @@ impl BatchedParquetReader {
                                     self.metadata.num_rows
                                 },
                             )
-                            .into_column(),
+                            .into_series(),
                         )
                     };
                 }
@@ -1254,7 +1150,7 @@ impl BatchedParquetReader {
 
                 if let Some(ca) = &self.include_file_path {
                     unsafe {
-                        df.with_column_unchecked(ca.clear().into_column());
+                        df.with_column_unchecked(ca.clear().into_series());
                     }
                 };
 
@@ -1292,7 +1188,7 @@ impl BatchedParquetReader {
 
                 if let Some(ca) = &self.include_file_path {
                     unsafe {
-                        df.with_column_unchecked(ca.clear().into_column());
+                        df.with_column_unchecked(ca.clear().into_series());
                     }
                 };
 
@@ -1348,61 +1244,6 @@ impl BatchedParquetIter {
                     self.current_batch.next().map(Ok)
                 },
             },
-        }
-    }
-}
-
-pub fn calc_prefilter_cost(mask: &arrow::bitmap::Bitmap) -> f64 {
-    let num_edges = mask.num_edges() as f64;
-    let rg_len = mask.len() as f64;
-
-    // @GB: I did quite some analysis on this.
-    //
-    // Pre-filtered and Post-filtered can both be faster in certain scenarios.
-    //
-    // - Pre-filtered is faster when there is some amount of clustering or
-    // sorting involved or if the number of values selected is small.
-    // - Post-filtering is faster when the predicate selects a somewhat random
-    // elements throughout the row group.
-    //
-    // The following is a heuristic value to try and estimate which one is
-    // faster. Essentially, it sees how many times it needs to switch between
-    // skipping items and collecting items and compares it against the number
-    // of values that it will collect.
-    //
-    // Closer to 0: pre-filtering is probably better.
-    // Closer to 1: post-filtering is probably better.
-    (num_edges / rg_len).clamp(0.0, 1.0)
-}
-
-pub enum PrefilterMaskSetting {
-    Auto,
-    Pre,
-    Post,
-}
-
-impl PrefilterMaskSetting {
-    pub fn init_from_env() -> Self {
-        std::env::var("POLARS_PQ_PREFILTERED_MASK").map_or(Self::Auto, |v| match &v[..] {
-            "auto" => Self::Auto,
-            "pre" => Self::Pre,
-            "post" => Self::Post,
-            _ => panic!("Invalid `POLARS_PQ_PREFILTERED_MASK` value '{v}'."),
-        })
-    }
-
-    pub fn should_prefilter(&self, prefilter_cost: f64, dtype: &ArrowDataType) -> bool {
-        match self {
-            Self::Auto => {
-                // Prefiltering is only expensive for nested types so we make the cut-off quite
-                // high.
-                let is_nested = dtype.is_nested();
-
-                // We empirically selected these numbers.
-                is_nested && prefilter_cost <= 0.01
-            },
-            Self::Pre => true,
-            Self::Post => false,
         }
     }
 }

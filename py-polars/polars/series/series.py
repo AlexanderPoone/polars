@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import math
 import os
-from collections.abc import Iterable, Sequence
 from contextlib import nullcontext
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal as PyDecimal
@@ -12,8 +11,13 @@ from typing import (
     Any,
     Callable,
     ClassVar,
+    Collection,
+    Generator,
+    Iterable,
     Literal,
+    Mapping,
     NoReturn,
+    Sequence,
     Union,
     overload,
 )
@@ -110,7 +114,6 @@ with contextlib.suppress(ImportError):  # Module not available when building doc
 
 if TYPE_CHECKING:
     import sys
-    from collections.abc import Collection, Generator, Mapping
 
     import jax
     import numpy.typing as npt
@@ -264,7 +267,7 @@ class Series:
         *,
         strict: bool = True,
         nan_to_null: bool = False,
-    ) -> None:
+    ):
         # If 'Unknown' treat as None to trigger type inference
         if dtype == Unknown:
             dtype = None
@@ -758,24 +761,24 @@ class Series:
         return self._from_pyseries(f(other))
 
     @overload  # type: ignore[override]
-    def __eq__(self, other: Expr) -> Expr: ...  # type: ignore[overload-overlap]
+    def __eq__(self, other: Expr) -> Expr: ...
 
     @overload
-    def __eq__(self, other: object) -> Series: ...
+    def __eq__(self, other: Any) -> Series: ...
 
-    def __eq__(self, other: object) -> Series | Expr:
+    def __eq__(self, other: Any) -> Series | Expr:
         warn_null_comparison(other)
         if isinstance(other, pl.Expr):
             return F.lit(self).__eq__(other)
         return self._comp(other, "eq")
 
     @overload  # type: ignore[override]
-    def __ne__(self, other: Expr) -> Expr: ...  # type: ignore[overload-overlap]
+    def __ne__(self, other: Expr) -> Expr: ...
 
     @overload
-    def __ne__(self, other: object) -> Series: ...
+    def __ne__(self, other: Any) -> Series: ...
 
-    def __ne__(self, other: object) -> Series | Expr:
+    def __ne__(self, other: Any) -> Series | Expr:
         warn_null_comparison(other)
         if isinstance(other, pl.Expr):
             return F.lit(self).__ne__(other)
@@ -869,7 +872,7 @@ class Series:
         """
         Method equivalent of equality operator `series == other` where `None == None`.
 
-        This differs from the standard `eq` where null values are propagated.
+        This differs from the standard `ne` where null values are propagated.
 
         Parameters
         ----------
@@ -1055,22 +1058,6 @@ class Series:
             return F.lit(self) - other
         return self._arithmetic(other, "sub", "sub_<>")
 
-    def _recursive_cast_to_dtype(self, leaf_dtype: PolarsDataType) -> Series:
-        """
-        Convert leaf dtype the to given primitive datatype.
-
-        This is equivalent to logic in DataType::cast_leaf() in Rust.
-        """
-
-        def convert_to_primitive(dtype: PolarsDataType) -> PolarsDataType:
-            if isinstance(dtype, Array):
-                return Array(convert_to_primitive(dtype.inner), shape=dtype.shape)
-            if isinstance(dtype, List):
-                return List(convert_to_primitive(dtype.inner))
-            return leaf_dtype
-
-        return self.cast(convert_to_primitive(self.dtype))
-
     @overload
     def __truediv__(self, other: Expr) -> Expr: ...
 
@@ -1084,20 +1071,11 @@ class Series:
             msg = "first cast to integer before dividing datelike dtypes"
             raise TypeError(msg)
 
-        self = (
-            self
-            if (
-                self.dtype.is_float()
-                or self.dtype.is_decimal()
-                or isinstance(self.dtype, (List, Array))
-                or (
-                    isinstance(other, Series) and isinstance(other.dtype, (List, Array))
-                )
-            )
-            else self._recursive_cast_to_dtype(Float64())
-        )
+        # this branch is exactly the floordiv function without rounding the floats
+        if self.dtype.is_float() or self.dtype == Decimal:
+            return self._arithmetic(other, "div", "div_<>")
 
-        return self._arithmetic(other, "div", "div_<>")
+        return self.cast(Float64) / other
 
     @overload
     def __floordiv__(self, other: Expr) -> Expr: ...
@@ -1232,7 +1210,7 @@ class Series:
             return self.has_nulls()
         return self.implode().list.contains(item).item()
 
-    def __iter__(self) -> Generator[Any]:
+    def __iter__(self) -> Generator[Any, None, None]:
         if self.dtype in (List, Array):
             # TODO: either make a change and return py-native list data here, or find
             #  a faster way to return nested/List series; sequential 'get_index' calls
@@ -3282,7 +3260,8 @@ class Series:
 
         Non-null elements are always preferred over null elements. The output is
         not guaranteed to be in any particular order, call :func:`sort` after
-        this function if you wish the output to be sorted.
+        this function if you wish the output to be sorted. This has time
+        complexity:
 
         This has time complexity:
 
@@ -3701,7 +3680,7 @@ class Series:
 
     def is_nan(self) -> Series:
         """
-        Returns a boolean Series indicating which values are NaN.
+        Returns a boolean Series indicating which values are not NaN.
 
         Returns
         -------
@@ -3995,7 +3974,7 @@ class Series:
 
     def cast(
         self,
-        dtype: type[int | float | str | bool] | PolarsDataType,
+        dtype: PolarsDataType | type[int] | type[float] | type[str] | type[bool],
         *,
         strict: bool = True,
         wrap_numerical: bool = False,
@@ -4048,14 +4027,7 @@ class Series:
         - :func:`polars.datatypes.Duration` -> :func:`polars.datatypes.Int64`
         - :func:`polars.datatypes.Categorical` -> :func:`polars.datatypes.UInt32`
         - `List(inner)` -> `List(physical of inner)`
-        - `Array(inner)` -> `Array(physical of inner)`
-        - `Struct(fields)` -> `Struct(physical of fields)`
         - Other data types will be left unchanged.
-
-        Warnings
-        --------
-        The physical representations are an implementation detail
-        and not guaranteed to be stable.
 
         Examples
         --------
@@ -4430,15 +4402,10 @@ class Series:
             srs = self
 
         # we have to build the tensor from a writable array or PyTorch will complain
-        # about it (writing to a readonly array results in undefined behavior)
+        # about it (as writing to readonly array results in undefined behavior)
         numpy_array = srs.to_numpy(writable=True)
-        try:
-            tensor = torch.from_numpy(numpy_array)
-        except TypeError:
-            if self.dtype == List:
-                msg = "cannot convert List dtype to Tensor (use Array dtype instead)"
-                raise TypeError(msg) from None
-            raise
+        tensor = torch.from_numpy(numpy_array)
+
         # note: named tensors are currently experimental
         # tensor.rename(self.name)
         return tensor
@@ -4973,14 +4940,14 @@ class Series:
 
         Examples
         --------
-        >>> s = pl.Series([0.01234, 3.333, 3450.0])
+        >>> s = pl.Series([0.01234, 3.333, 1234.0])
         >>> s.round_sig_figs(2)
         shape: (3,)
         Series: '' [f64]
         [
                 0.012
                 3.3
-                3500.0
+                1200.0
         ]
         """
 
@@ -7382,60 +7349,6 @@ class Series:
         ]
         """
 
-    def bitwise_count_ones(self) -> Self:
-        """Evaluate the number of set bits."""
-
-    def bitwise_count_zeros(self) -> Self:
-        """Evaluate the number of unset Self."""
-
-    def bitwise_leading_ones(self) -> Self:
-        """Evaluate the number most-significant set bits before seeing an unset bit."""
-
-    def bitwise_leading_zeros(self) -> Self:
-        """Evaluate the number most-significant unset bits before seeing a set bit."""
-
-    def bitwise_trailing_ones(self) -> Self:
-        """Evaluate the number least-significant set bits before seeing an unset bit."""
-
-    def bitwise_trailing_zeros(self) -> Self:
-        """Evaluate the number least-significant unset bits before seeing a set bit."""
-
-    def bitwise_and(self) -> PythonLiteral | None:
-        """Perform an aggregation of bitwise ANDs."""
-        return self._s.bitwise_and()
-
-    def bitwise_or(self) -> PythonLiteral | None:
-        """Perform an aggregation of bitwise ORs."""
-        return self._s.bitwise_or()
-
-    def bitwise_xor(self) -> PythonLiteral | None:
-        """Perform an aggregation of bitwise XORs."""
-        return self._s.bitwise_xor()
-
-    def first(self) -> PythonLiteral | None:
-        """
-        Get the first element of the Series.
-
-        Returns `None` if the Series is empty.
-        """
-        return self._s.first()
-
-    def last(self) -> PythonLiteral | None:
-        """
-        Get the last element of the Series.
-
-        Returns `None` if the Series is empty.
-        """
-        return self._s.last()
-
-    def approx_n_unique(self) -> PythonLiteral | None:
-        """
-        Approximate count of unique values.
-
-        This is done using the HyperLogLog++ algorithm for cardinality estimation.
-        """
-        return self._s.approx_n_unique()
-
     # Keep the `list` and `str` properties below at the end of the definition of Series,
     # as to not confuse mypy with the type annotation `str` and `list`
 
@@ -7495,13 +7408,13 @@ class Series:
 
         - `s.plot.hist(**kwargs)`
           is shorthand for
-          `alt.Chart(s.to_frame()).mark_bar(tooltip=True).encode(x=alt.X(f'{s.name}:Q', bin=True), y='count()', **kwargs).interactive()`
+          `alt.Chart(s.to_frame()).mark_bar().encode(x=alt.X(f'{s.name}:Q', bin=True), y='count()', **kwargs).interactive()`
         - `s.plot.kde(**kwargs)`
           is shorthand for
-          `alt.Chart(s.to_frame()).transform_density(s.name, as_=[s.name, 'density']).mark_area(tooltip=True).encode(x=s.name, y='density:Q', **kwargs).interactive()`
+          `alt.Chart(s.to_frame()).transform_density(s.name, as_=[s.name, 'density']).mark_area().encode(x=s.name, y='density:Q', **kwargs).interactive()`
         - for any other attribute `attr`, `s.plot.attr(**kwargs)`
           is shorthand for
-          `alt.Chart(s.to_frame().with_row_index()).mark_attr(tooltip=True).encode(x='index', y=s.name, **kwargs).interactive()`
+          `alt.Chart(s.to_frame().with_row_index()).mark_attr().encode(x='index', y=s.name, **kwargs).interactive()`
 
         Examples
         --------
@@ -7522,24 +7435,6 @@ class Series:
             msg = "altair>=5.4.0 is required for `.plot`"
             raise ModuleUpgradeRequiredError(msg)
         return SeriesPlot(self)
-
-    def _row_decode(
-        self,
-        dtypes: Iterable[tuple[str, DataType]],  # type: ignore[valid-type]
-        fields: Iterable[tuple[bool, bool, bool]],
-    ) -> DataFrame:
-        """
-        Row decode the given Series.
-
-        This is an internal function not meant for outside consumption and can
-        be changed or removed at any point in time.
-
-        fields have order:
-        - descending
-        - nulls_last
-        - no_order
-        """
-        return pl.DataFrame._from_pydf(self._s._row_decode(list(dtypes), list(fields)))
 
 
 def _resolve_temporal_dtype(

@@ -1,4 +1,4 @@
-use polars_compute::var_cov::VarState;
+use arity::unary_elementwise_values;
 
 use super::*;
 
@@ -15,11 +15,20 @@ where
     ChunkedArray<T>: ChunkAgg<T::Native>,
 {
     fn var(&self, ddof: u8) -> Option<f64> {
-        let mut out = VarState::default();
-        for arr in self.downcast_iter() {
-            out.combine(&polars_compute::var_cov::var(arr))
+        let n_values = self.len() - self.null_count();
+        if n_values <= ddof as usize {
+            return None;
         }
-        out.finalize(ddof)
+
+        let mean = self.mean()?;
+        let squared: Float64Chunked = unary_elementwise_values(self, |value| {
+            let tmp = value.to_f64().unwrap() - mean;
+            tmp * tmp
+        });
+
+        squared
+            .sum()
+            .map(|sum| sum / (n_values as f64 - ddof as f64))
     }
 
     fn std(&self, ddof: u8) -> Option<f64> {

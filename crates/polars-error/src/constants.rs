@@ -11,7 +11,7 @@ pub static FALSE: &str = "false";
 
 #[cfg(not(feature = "python"))]
 pub static LENGTH_LIMIT_MSG: &str =
-    "Polars' maximum length reached. Consider compiling with 'bigidx' feature.";
+    "polars' maximum length reached. Consider compiling with 'bigidx' feature.";
 #[cfg(feature = "python")]
 pub static LENGTH_LIMIT_MSG: &str =
-    "Polars' maximum length reached. Consider installing 'polars-u64-idx'.";
+    "polars' maximum length reached. Consider installing 'polars-u64-idx'.";

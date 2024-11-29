@@ -145,8 +145,8 @@ fn top_k_binary_impl(
     ChunkedArray::with_chunk_like(ca, arr)
 }
 
-pub fn top_k(s: &[Column], descending: bool) -> PolarsResult<Column> {
-    fn extract_target_and_k(s: &[Column]) -> PolarsResult<(usize, &Column)> {
+pub fn top_k(s: &[Series], descending: bool) -> PolarsResult<Series> {
+    fn extract_target_and_k(s: &[Series]) -> PolarsResult<(usize, &Series)> {
         let k_s = &s[1];
         polars_ensure!(
             k_s.len() == 1,
@@ -197,20 +197,20 @@ pub fn top_k(s: &[Column], descending: bool) -> PolarsResult<Column> {
     let s = src.to_physical_repr();
 
     match s.dtype() {
-        DataType::Boolean => Ok(top_k_bool_impl(s.bool().unwrap(), k, descending).into_column()),
+        DataType::Boolean => Ok(top_k_bool_impl(s.bool().unwrap(), k, descending).into_series()),
         DataType::String => {
             let ca = top_k_binary_impl(&s.str().unwrap().as_binary(), k, descending);
             let ca = unsafe { ca.to_string_unchecked() };
-            Ok(ca.into_column())
+            Ok(ca.into_series())
         },
-        DataType::Binary => Ok(top_k_binary_impl(s.binary().unwrap(), k, descending).into_column()),
+        DataType::Binary => Ok(top_k_binary_impl(s.binary().unwrap(), k, descending).into_series()),
         #[cfg(feature = "dtype-decimal")]
         DataType::Decimal(_, _) => {
             let src = src.decimal().unwrap();
             let ca = top_k_num_impl(src, k, descending);
             let mut lca = DecimalChunked::new_logical(ca);
             lca.2 = Some(DataType::Decimal(src.precision(), Some(src.scale())));
-            Ok(lca.into_column())
+            Ok(lca.into_series())
         },
         DataType::Null => Ok(src.slice(0, k)),
         #[cfg(feature = "dtype-struct")]
@@ -221,7 +221,7 @@ pub fn top_k(s: &[Column], descending: bool) -> PolarsResult<Column> {
         _dt => {
             macro_rules! dispatch {
                 ($ca:expr) => {{
-                    top_k_num_impl($ca, k, descending).into_column()
+                    top_k_num_impl($ca, k, descending).into_series()
                 }};
             }
             unsafe { downcast_as_macro_arg_physical!(&s, dispatch).cast_unchecked(origin_dtype) }
@@ -229,9 +229,9 @@ pub fn top_k(s: &[Column], descending: bool) -> PolarsResult<Column> {
     }
 }
 
-pub fn top_k_by(s: &[Column], descending: Vec<bool>) -> PolarsResult<Column> {
+pub fn top_k_by(s: &[Series], descending: Vec<bool>) -> PolarsResult<Series> {
     /// Return (k, src, by)
-    fn extract_parameters(s: &[Column]) -> PolarsResult<(usize, &Column, &[Column])> {
+    fn extract_parameters(s: &[Series]) -> PolarsResult<(usize, &Series, &[Series])> {
         let k_s = &s[1];
 
         polars_ensure!(
@@ -271,10 +271,10 @@ pub fn top_k_by(s: &[Column], descending: Vec<bool>) -> PolarsResult<Column> {
 
 fn top_k_by_impl(
     k: usize,
-    src: &Column,
-    by: &[Column],
+    src: &Series,
+    by: &[Series],
     descending: Vec<bool>,
-) -> PolarsResult<Column> {
+) -> PolarsResult<Series> {
     if src.is_empty() {
         return Ok(src.clone());
     }
@@ -285,14 +285,10 @@ fn top_k_by_impl(
         nulls_last: vec![true; by.len()],
         multithreaded,
         maintain_order: false,
-        limit: None,
     };
 
     let idx = _arg_bottom_k(k, by, &mut sort_options)?;
 
-    let result = unsafe {
-        src.as_materialized_series()
-            .take_unchecked(&idx.into_inner())
-    };
-    Ok(result.into())
+    let result = unsafe { src.take_unchecked(&idx.into_inner()) };
+    Ok(result)
 }

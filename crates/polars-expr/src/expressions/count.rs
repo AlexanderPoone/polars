@@ -21,8 +21,11 @@ impl PhysicalExpr for CountExpr {
         Some(&self.expr)
     }
 
-    fn evaluate(&self, df: &DataFrame, _state: &ExecutionState) -> PolarsResult<Column> {
-        Ok(Series::new(PlSmallStr::from_static("len"), [df.height() as IdxSize]).into_column())
+    fn evaluate(&self, df: &DataFrame, _state: &ExecutionState) -> PolarsResult<Series> {
+        Ok(Series::new(
+            PlSmallStr::from_static("len"),
+            [df.height() as IdxSize],
+        ))
     }
 
     fn evaluate_on_groups<'a>(
@@ -32,8 +35,8 @@ impl PhysicalExpr for CountExpr {
         _state: &ExecutionState,
     ) -> PolarsResult<AggregationContext<'a>> {
         let ca = groups.group_count().with_name(PlSmallStr::from_static(LEN));
-        let c = ca.into_column();
-        Ok(AggregationContext::new(c, Cow::Borrowed(groups), true))
+        let s = ca.into_series();
+        Ok(AggregationContext::new(s, Cow::Borrowed(groups), true))
     }
 
     fn to_field(&self, _input_schema: &Schema) -> PolarsResult<Field> {
@@ -56,19 +59,19 @@ impl PartitionedAggregation for CountExpr {
         df: &DataFrame,
         groups: &GroupsProxy,
         state: &ExecutionState,
-    ) -> PolarsResult<Column> {
+    ) -> PolarsResult<Series> {
         self.evaluate_on_groups(df, groups, state)
-            .map(|mut ac| ac.aggregated().into_column())
+            .map(|mut ac| ac.aggregated())
     }
 
     /// Called to merge all the partitioned results in a final aggregate.
     #[allow(clippy::ptr_arg)]
     fn finalize(
         &self,
-        partitioned: Column,
+        partitioned: Series,
         groups: &GroupsProxy,
         _state: &ExecutionState,
-    ) -> PolarsResult<Column> {
+    ) -> PolarsResult<Series> {
         // SAFETY: groups are in bounds.
         let agg = unsafe { partitioned.agg_sum(groups) };
         Ok(agg.with_name(PlSmallStr::from_static(LEN)))

@@ -42,7 +42,6 @@ pub enum DslFunction {
     Rename {
         existing: Arc<[PlSmallStr]>,
         new: Arc<[PlSmallStr]>,
-        strict: bool,
     },
     Unnest(Vec<Selector>),
     Stats(StatsFunction),
@@ -72,7 +71,7 @@ pub enum StatsFunction {
     },
     Quantile {
         quantile: Expr,
-        method: QuantileMethod,
+        interpol: QuantileInterpolOptions,
     },
     Median,
     Mean,
@@ -81,12 +80,11 @@ pub enum StatsFunction {
     Max,
 }
 
-pub(crate) fn validate_columns_in_input<S: AsRef<str>, I: IntoIterator<Item = S>>(
-    columns: I,
+pub(crate) fn validate_columns_in_input<S: AsRef<str>>(
+    columns: &[S],
     input_schema: &Schema,
     operation_name: &str,
 ) -> PolarsResult<()> {
-    let columns = columns.into_iter();
     for c in columns {
         polars_ensure!(input_schema.contains(c.as_ref()), ColumnNotFound: "'{}' on column: '{}' is invalid\n\nSchema at this point: {:?}", operation_name, c.as_ref(), input_schema)
     }
@@ -121,15 +119,10 @@ impl DslFunction {
                 offset,
                 schema: Default::default(),
             },
-            DslFunction::Rename {
-                existing,
-                new,
-                strict,
-            } => {
+            DslFunction::Rename { existing, new } => {
                 let swapping = new.iter().any(|name| input_schema.get(name).is_some());
-                if strict {
-                    validate_columns_in_input(existing.as_ref(), input_schema, "rename")?;
-                }
+                validate_columns_in_input(existing.as_ref(), input_schema, "rename")?;
+
                 FunctionIR::Rename {
                     existing,
                     new,

@@ -5,7 +5,7 @@ use crate::frame::group_by::*;
 use crate::prelude::*;
 
 macro_rules! impl_dyn_series {
-    ($ca: ident, $pdt:ident) => {
+    ($ca: ident) => {
         impl private::PrivateSeries for SeriesWrap<$ca> {
             fn compute_len(&mut self) {
                 self.0.compute_len()
@@ -96,32 +96,49 @@ macro_rules! impl_dyn_series {
                 self.0.agg_list(groups)
             }
 
-            #[cfg(feature = "bitwise")]
-            unsafe fn agg_and(&self, groups: &GroupsProxy) -> Series {
-                self.0.agg_and(groups)
-            }
-            #[cfg(feature = "bitwise")]
-            unsafe fn agg_or(&self, groups: &GroupsProxy) -> Series {
-                self.0.agg_or(groups)
-            }
-            #[cfg(feature = "bitwise")]
-            unsafe fn agg_xor(&self, groups: &GroupsProxy) -> Series {
-                self.0.agg_xor(groups)
-            }
-
             fn subtract(&self, rhs: &Series) -> PolarsResult<Series> {
+                polars_ensure!(
+                    self.dtype() == rhs.dtype(),
+                    opq = sub,
+                    self.dtype(),
+                    rhs.dtype()
+                );
                 NumOpsDispatch::subtract(&self.0, rhs)
             }
             fn add_to(&self, rhs: &Series) -> PolarsResult<Series> {
+                polars_ensure!(
+                    self.dtype() == rhs.dtype(),
+                    opq = add,
+                    self.dtype(),
+                    rhs.dtype()
+                );
                 NumOpsDispatch::add_to(&self.0, rhs)
             }
             fn multiply(&self, rhs: &Series) -> PolarsResult<Series> {
+                polars_ensure!(
+                    self.dtype() == rhs.dtype(),
+                    opq = mul,
+                    self.dtype(),
+                    rhs.dtype()
+                );
                 NumOpsDispatch::multiply(&self.0, rhs)
             }
             fn divide(&self, rhs: &Series) -> PolarsResult<Series> {
+                polars_ensure!(
+                    self.dtype() == rhs.dtype(),
+                    opq = div,
+                    self.dtype(),
+                    rhs.dtype()
+                );
                 NumOpsDispatch::divide(&self.0, rhs)
             }
             fn remainder(&self, rhs: &Series) -> PolarsResult<Series> {
+                polars_ensure!(
+                    self.dtype() == rhs.dtype(),
+                    opq = rem,
+                    self.dtype(),
+                    rhs.dtype()
+                );
                 NumOpsDispatch::remainder(&self.0, rhs)
             }
             #[cfg(feature = "algorithm_group_by")]
@@ -131,7 +148,7 @@ macro_rules! impl_dyn_series {
 
             fn arg_sort_multiple(
                 &self,
-                by: &[Column],
+                by: &[Series],
                 options: &SortMultipleOptions,
             ) -> PolarsResult<IdxCa> {
                 self.0.arg_sort_multiple(by, options)
@@ -149,11 +166,7 @@ macro_rules! impl_dyn_series {
             }
 
             fn get_metadata(&self) -> Option<RwLockReadGuard<dyn MetadataTrait>> {
-                self.0.metadata_dyn()
-            }
-
-            fn boxed_metadata<'a>(&'a self) -> Option<Box<dyn MetadataTrait + 'a>> {
-                Some(self.0.boxed_metadata_dyn())
+                self.metadata_dyn()
             }
 
             fn rename(&mut self, name: PlSmallStr) {
@@ -335,35 +348,9 @@ macro_rules! impl_dyn_series {
             fn quantile_reduce(
                 &self,
                 quantile: f64,
-                method: QuantileMethod,
+                interpol: QuantileInterpolOptions,
             ) -> PolarsResult<Scalar> {
-                QuantileAggSeries::quantile_reduce(&self.0, quantile, method)
-            }
-            #[cfg(feature = "bitwise")]
-            fn and_reduce(&self) -> PolarsResult<Scalar> {
-                let dt = <$pdt as PolarsDataType>::get_dtype();
-                let av = self.0.and_reduce().map_or(AnyValue::Null, Into::into);
-
-                Ok(Scalar::new(dt, av))
-            }
-            #[cfg(feature = "bitwise")]
-            fn or_reduce(&self) -> PolarsResult<Scalar> {
-                let dt = <$pdt as PolarsDataType>::get_dtype();
-                let av = self.0.or_reduce().map_or(AnyValue::Null, Into::into);
-
-                Ok(Scalar::new(dt, av))
-            }
-            #[cfg(feature = "bitwise")]
-            fn xor_reduce(&self) -> PolarsResult<Scalar> {
-                let dt = <$pdt as PolarsDataType>::get_dtype();
-                let av = self.0.xor_reduce().map_or(AnyValue::Null, Into::into);
-
-                Ok(Scalar::new(dt, av))
-            }
-
-            #[cfg(feature = "approx_unique")]
-            fn approx_n_unique(&self) -> PolarsResult<IdxSize> {
-                Ok(ChunkApproxNUnique::approx_n_unique(&self.0))
+                QuantileAggSeries::quantile_reduce(&self.0, quantile, interpol)
             }
 
             fn clone_inner(&self) -> Arc<dyn SeriesTrait> {
@@ -381,5 +368,5 @@ macro_rules! impl_dyn_series {
     };
 }
 
-impl_dyn_series!(Float32Chunked, Float32Type);
-impl_dyn_series!(Float64Chunked, Float64Type);
+impl_dyn_series!(Float32Chunked);
+impl_dyn_series!(Float64Chunked);

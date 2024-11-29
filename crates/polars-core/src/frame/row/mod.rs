@@ -6,6 +6,7 @@ use std::borrow::Borrow;
 use std::fmt::Debug;
 #[cfg(feature = "object")]
 use std::hash::{Hash, Hasher};
+use std::hint::unreachable_unchecked;
 
 use arrow::bitmap::Bitmap;
 pub use av_buffer::*;
@@ -67,7 +68,7 @@ impl DataFrame {
         let width = self.width();
         let size = width * self.height();
         let mut buf = vec![AnyValue::Null; size];
-        for (col_i, s) in self.materialized_column_iter().enumerate() {
+        for (col_i, s) in self.columns.iter().enumerate() {
             match s.dtype() {
                 #[cfg(feature = "object")]
                 DataType::Object(_, _) => {
@@ -115,6 +116,10 @@ pub fn infer_schema(
 }
 
 fn add_or_insert(values: &mut Tracker, key: PlSmallStr, dtype: DataType) {
+    if dtype == DataType::Null {
+        return;
+    }
+
     if values.contains_key(&key) {
         let x = values.get_mut(&key).unwrap();
         x.insert(dtype);
@@ -205,7 +210,7 @@ pub fn rows_to_schema_first_non_null(
             .iter_values()
             .enumerate()
             .filter_map(|(i, dtype)| {
-                // double check struct and list types
+                // double check struct and list types types
                 // nested null values can be wrongly inferred by front ends
                 match dtype {
                     DataType::Null | DataType::List(_) => Some(i),

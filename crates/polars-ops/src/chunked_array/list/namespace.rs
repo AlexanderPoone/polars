@@ -31,7 +31,7 @@ pub(super) fn has_inner_nulls(ca: &ListChunked) -> bool {
 }
 
 fn cast_rhs(
-    other: &mut [Column],
+    other: &mut [Series],
     inner_type: &DataType,
     dtype: &DataType,
     length: usize,
@@ -44,9 +44,7 @@ fn cast_rhs(
         }
         if !matches!(s.dtype(), DataType::List(_)) && s.dtype() == inner_type {
             // coerce to list JIT
-            *s = s
-                .reshape_list(&[ReshapeDimension::Infer, ReshapeDimension::new_dimension(1)])
-                .unwrap();
+            *s = s.reshape_list(&[-1, 1]).unwrap();
         }
         if s.dtype() != dtype {
             *s = s.cast(dtype).map_err(|e| {
@@ -296,7 +294,7 @@ pub trait ListNameSpaceImpl: AsList {
         ca.try_apply_amortized(|s| diff(s.as_ref(), n, null_behavior))
     }
 
-    fn lst_shift(&self, periods: &Column) -> PolarsResult<ListChunked> {
+    fn lst_shift(&self, periods: &Series) -> PolarsResult<ListChunked> {
         let ca = self.as_list();
         let periods_s = periods.cast(&DataType::Int64)?;
         let periods = periods_s.i64()?;
@@ -326,13 +324,6 @@ pub trait ListNameSpaceImpl: AsList {
 
     fn lst_lengths(&self) -> IdxCa {
         let ca = self.as_list();
-
-        let ca_validity = ca.rechunk_validity();
-
-        if ca_validity.as_ref().map_or(false, |x| x.set_bits() == 0) {
-            return IdxCa::full_null(ca.name().clone(), ca.len());
-        }
-
         let mut lengths = Vec::with_capacity(ca.len());
         ca.downcast_iter().for_each(|arr| {
             let offsets = arr.offsets().as_slice();
@@ -342,9 +333,7 @@ pub trait ListNameSpaceImpl: AsList {
                 last = *o;
             }
         });
-
-        let arr = IdxArr::from_vec(lengths).with_validity(ca_validity);
-        IdxCa::with_chunk(ca.name().clone(), arr)
+        IdxCa::from_vec(ca.name().clone(), lengths)
     }
 
     /// Get the value by index in the sublists.
@@ -595,7 +584,7 @@ pub trait ListNameSpaceImpl: AsList {
         out.map(|ok| self.same_type(ok))
     }
 
-    fn lst_concat(&self, other: &[Column]) -> PolarsResult<ListChunked> {
+    fn lst_concat(&self, other: &[Series]) -> PolarsResult<ListChunked> {
         let ca = self.as_list();
         let other_len = other.len();
         let length = ca.len();
@@ -662,7 +651,7 @@ pub trait ListNameSpaceImpl: AsList {
                 ca.get_values_size() + vals_size_other + 1,
                 length,
                 ca.name().clone(),
-            );
+            )?;
             ca.into_iter().for_each(|opt_s| {
                 let opt_s = opt_s.map(|mut s| {
                     for append in &to_append {
@@ -699,7 +688,7 @@ pub trait ListNameSpaceImpl: AsList {
                 ca.get_values_size() + vals_size_other + 1,
                 length,
                 ca.name().clone(),
-            );
+            )?;
 
             for _ in 0..ca.len() {
                 let mut acc = match first_iter.next().unwrap() {

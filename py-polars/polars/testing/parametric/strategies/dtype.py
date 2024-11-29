@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Collection, Sequence
 
 import hypothesis.strategies as st
 from hypothesis.errors import InvalidArgument
@@ -35,8 +35,6 @@ from polars.datatypes import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Sequence
-
     from hypothesis.strategies import DrawFn, SearchStrategy
 
     from polars._typing import CategoricalOrdering, PolarsDataType, TimeUnit

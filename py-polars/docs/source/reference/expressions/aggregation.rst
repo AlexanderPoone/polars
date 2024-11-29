@@ -12,9 +12,6 @@ Aggregation
     Expr.approx_n_unique
     Expr.arg_max
     Expr.arg_min
-    Expr.bitwise_and
-    Expr.bitwise_or
-    Expr.bitwise_xor
     Expr.count
     Expr.first
     Expr.implode

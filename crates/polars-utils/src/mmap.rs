@@ -61,12 +61,6 @@ mod private {
         }
     }
 
-    impl From<Vec<u8>> for MemSlice {
-        fn from(value: Vec<u8>) -> Self {
-            Self::from_vec(value)
-        }
-    }
-
     impl MemSlice {
         pub const EMPTY: Self = Self::from_static(&[]);
 
@@ -130,18 +124,10 @@ mod private {
             out
         }
     }
-
-    impl From<bytes::Bytes> for MemSlice {
-        fn from(value: bytes::Bytes) -> Self {
-            Self::from_bytes(value)
-        }
-    }
 }
 
 use memmap::MmapOptions;
-#[cfg(target_family = "unix")]
-use polars_error::polars_bail;
-use polars_error::PolarsResult;
+use polars_error::{polars_bail, PolarsResult};
 pub use private::MemSlice;
 
 /// A cursor over a [`MemSlice`].

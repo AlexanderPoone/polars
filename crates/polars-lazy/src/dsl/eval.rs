@@ -1,5 +1,4 @@
 use polars_core::prelude::*;
-use polars_core::POOL;
 use polars_expr::{create_physical_expr, ExpressionConversionState};
 use rayon::prelude::*;
 
@@ -46,13 +45,12 @@ pub trait ExprEvalExtension: IntoExpr + Sized {
     fn cumulative_eval(self, expr: Expr, min_periods: usize, parallel: bool) -> Expr {
         let this = self.into_expr();
         let expr2 = expr.clone();
-        let func = move |mut c: Column| {
-            let name = c.name().clone();
-            c.rename(PlSmallStr::EMPTY);
+        let func = move |mut s: Series| {
+            let name = s.name().clone();
+            s.rename(PlSmallStr::EMPTY);
 
             // Ensure we get the new schema.
-            let output_field = eval_field_to_dtype(c.field().as_ref(), &expr, false);
-            let schema = Arc::new(Schema::from_iter(std::iter::once(output_field.clone())));
+            let output_field = eval_field_to_dtype(s.field().as_ref(), &expr, false);
 
             let expr = expr.clone();
             let mut arena = Arena::with_capacity(10);
@@ -61,48 +59,46 @@ pub trait ExprEvalExtension: IntoExpr + Sized {
                 &aexpr,
                 Context::Default,
                 &arena,
-                &schema,
+                None,
                 &mut ExpressionConversionState::new(true, 0),
             )?;
 
             let state = ExecutionState::new();
 
-            let finish = |out: Column| {
+            let finish = |out: Series| {
                 polars_ensure!(
                     out.len() <= 1,
                     ComputeError:
                     "expected single value, got a result with length {}, {:?}",
                     out.len(), out,
                 );
-                Ok(out.get(0).unwrap().into_static())
+                Ok(out.get(0).unwrap().into_static().unwrap())
             };
 
             let avs = if parallel {
-                POOL.install(|| {
-                    (1..c.len() + 1)
-                        .into_par_iter()
-                        .map(|len| {
-                            let c = c.slice(0, len);
-                            if (len - c.null_count()) >= min_periods {
-                                let df = c.clone().into_frame();
-                                let out = phys_expr.evaluate(&df, &state)?.into_column();
-                                finish(out)
-                            } else {
-                                Ok(AnyValue::Null)
-                            }
-                        })
-                        .collect::<PolarsResult<Vec<_>>>()
-                })?
+                (1..s.len() + 1)
+                    .into_par_iter()
+                    .map(|len| {
+                        let s = s.slice(0, len);
+                        if (len - s.null_count()) >= min_periods {
+                            let df = s.into_frame();
+                            let out = phys_expr.evaluate(&df, &state)?;
+                            finish(out)
+                        } else {
+                            Ok(AnyValue::Null)
+                        }
+                    })
+                    .collect::<PolarsResult<Vec<_>>>()?
             } else {
                 let mut df_container = DataFrame::empty();
-                (1..c.len() + 1)
+                (1..s.len() + 1)
                     .map(|len| {
-                        let c = c.slice(0, len);
-                        if (len - c.null_count()) >= min_periods {
+                        let s = s.slice(0, len);
+                        if (len - s.null_count()) >= min_periods {
                             unsafe {
-                                df_container.with_column_unchecked(c.into_column());
-                                let out = phys_expr.evaluate(&df_container, &state)?.into_column();
-                                df_container.clear_columns();
+                                df_container.get_columns_mut().push(s);
+                                let out = phys_expr.evaluate(&df_container, &state)?;
+                                df_container.get_columns_mut().clear();
                                 finish(out)
                             }
                         } else {
@@ -111,12 +107,12 @@ pub trait ExprEvalExtension: IntoExpr + Sized {
                     })
                     .collect::<PolarsResult<Vec<_>>>()?
             };
-            let c = Column::new(name, avs);
+            let s = Series::new(name, avs);
 
-            if c.dtype() != output_field.dtype() {
-                c.cast(output_field.dtype()).map(Some)
+            if s.dtype() != output_field.dtype() {
+                s.cast(output_field.dtype()).map(Some)
             } else {
-                Ok(Some(c))
+                Ok(Some(s))
             }
         };
 

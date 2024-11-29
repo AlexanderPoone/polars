@@ -2,7 +2,7 @@ use polars_error::PolarsError;
 use serde::de::Error;
 use serde::*;
 
-use crate::prelude::{Column, DataFrame};
+use crate::prelude::{DataFrame, Series};
 
 // utility to ensure we serde to a struct
 // {
@@ -12,12 +12,12 @@ use crate::prelude::{Column, DataFrame};
 // and is backwards compatible
 #[derive(Deserialize)]
 struct Util {
-    columns: Vec<Column>,
+    columns: Vec<Series>,
 }
 
 #[derive(Serialize)]
 struct UtilBorrowed<'a> {
-    columns: &'a [Column],
+    columns: &'a [Series],
 }
 
 impl<'de> Deserialize<'de> for DataFrame {

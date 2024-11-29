@@ -1,10 +1,12 @@
+use std::sync::Arc;
+
 use arrow::legacy::error::{polars_bail, PolarsResult};
 use polars_core::prelude::Field;
 use polars_core::schema::Schema;
 use polars_utils::pl_str::PlSmallStr;
 
-use super::{ColumnsUdf, Expr, GetOutput, OpaqueColumnUdf};
-use crate::prelude::{new_column_udf, Context, FunctionOptions};
+use super::{Expr, GetOutput, SeriesUdf, SpecialEq};
+use crate::prelude::{Context, FunctionOptions};
 
 /// Represents a user-defined function
 #[derive(Clone)]
@@ -16,7 +18,7 @@ pub struct UserDefinedFunction {
     /// The function output type.
     pub return_type: GetOutput,
     /// The function implementation.
-    pub fun: OpaqueColumnUdf,
+    pub fun: SpecialEq<Arc<dyn SeriesUdf>>,
     /// Options for the function.
     pub options: FunctionOptions,
 }
@@ -38,13 +40,13 @@ impl UserDefinedFunction {
         name: PlSmallStr,
         input_fields: Vec<Field>,
         return_type: GetOutput,
-        fun: impl ColumnsUdf + 'static,
+        fun: impl SeriesUdf + 'static,
     ) -> Self {
         Self {
             name,
             input_fields,
             return_type,
-            fun: new_column_udf(fun),
+            fun: SpecialEq::new(Arc::new(fun)),
             options: FunctionOptions::default(),
         }
     }

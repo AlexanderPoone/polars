@@ -13,7 +13,7 @@ use arrow::legacy::kernels::rolling::no_nulls::{
 };
 use arrow::legacy::kernels::rolling::nulls::RollingAggWindowNulls;
 use arrow::legacy::kernels::take_agg::*;
-use arrow::legacy::prelude::QuantileMethod;
+use arrow::legacy::prelude::QuantileInterpolOptions;
 use arrow::legacy::trusted_len::TrustedLenPush;
 use arrow::types::NativeType;
 use num_traits::pow::Pow;
@@ -65,7 +65,7 @@ pub fn _rolling_apply_agg_window_nulls<'a, Agg, T, O>(
     values: &'a [T],
     validity: &'a Bitmap,
     offsets: O,
-    params: Option<RollingFnParams>,
+    params: DynArgs,
 ) -> PrimitiveArray<T>
 where
     O: Iterator<Item = (IdxSize, IdxSize)> + TrustedLen,
@@ -120,7 +120,7 @@ where
 pub fn _rolling_apply_agg_window_no_nulls<'a, Agg, T, O>(
     values: &'a [T],
     offsets: O,
-    params: Option<RollingFnParams>,
+    params: DynArgs,
 ) -> PrimitiveArray<T>
 where
     // items (offset, len) -> so offsets are offset, offset + len
@@ -295,7 +295,8 @@ impl_take_extremum!(float: f64);
 /// This trait will ensure the specific dispatch works without complicating
 /// the trait bounds.
 trait QuantileDispatcher<K> {
-    fn _quantile(self, quantile: f64, method: QuantileMethod) -> PolarsResult<Option<K>>;
+    fn _quantile(self, quantile: f64, interpol: QuantileInterpolOptions)
+        -> PolarsResult<Option<K>>;
 
     fn _median(self) -> Option<K>;
 }
@@ -306,8 +307,12 @@ where
     T::Native: Ord,
     ChunkedArray<T>: IntoSeries,
 {
-    fn _quantile(self, quantile: f64, method: QuantileMethod) -> PolarsResult<Option<f64>> {
-        self.quantile_faster(quantile, method)
+    fn _quantile(
+        self,
+        quantile: f64,
+        interpol: QuantileInterpolOptions,
+    ) -> PolarsResult<Option<f64>> {
+        self.quantile_faster(quantile, interpol)
     }
     fn _median(self) -> Option<f64> {
         self.median_faster()
@@ -315,16 +320,24 @@ where
 }
 
 impl QuantileDispatcher<f32> for Float32Chunked {
-    fn _quantile(self, quantile: f64, method: QuantileMethod) -> PolarsResult<Option<f32>> {
-        self.quantile_faster(quantile, method)
+    fn _quantile(
+        self,
+        quantile: f64,
+        interpol: QuantileInterpolOptions,
+    ) -> PolarsResult<Option<f32>> {
+        self.quantile_faster(quantile, interpol)
     }
     fn _median(self) -> Option<f32> {
         self.median_faster()
     }
 }
 impl QuantileDispatcher<f64> for Float64Chunked {
-    fn _quantile(self, quantile: f64, method: QuantileMethod) -> PolarsResult<Option<f64>> {
-        self.quantile_faster(quantile, method)
+    fn _quantile(
+        self,
+        quantile: f64,
+        interpol: QuantileInterpolOptions,
+    ) -> PolarsResult<Option<f64>> {
+        self.quantile_faster(quantile, interpol)
     }
     fn _median(self) -> Option<f64> {
         self.median_faster()
@@ -335,7 +348,7 @@ unsafe fn agg_quantile_generic<T, K>(
     ca: &ChunkedArray<T>,
     groups: &GroupsProxy,
     quantile: f64,
-    method: QuantileMethod,
+    interpol: QuantileInterpolOptions,
 ) -> Series
 where
     T: PolarsNumericType,
@@ -358,7 +371,7 @@ where
                 }
                 let take = { ca.take_unchecked(idx) };
                 // checked with invalid quantile check
-                take._quantile(quantile, method).unwrap_unchecked()
+                take._quantile(quantile, interpol).unwrap_unchecked()
             })
         },
         GroupsProxy::Slice { groups, .. } => {
@@ -375,9 +388,9 @@ where
                     None => _rolling_apply_agg_window_no_nulls::<QuantileWindow<_>, _, _>(
                         values,
                         offset_iter,
-                        Some(RollingFnParams::Quantile(RollingQuantileParams {
+                        Some(Arc::new(RollingQuantileParams {
                             prob: quantile,
-                            method,
+                            interpol,
                         })),
                     ),
                     Some(validity) => {
@@ -385,9 +398,9 @@ where
                             values,
                             validity,
                             offset_iter,
-                            Some(RollingFnParams::Quantile(RollingQuantileParams {
+                            Some(Arc::new(RollingQuantileParams {
                                 prob: quantile,
-                                method,
+                                interpol,
                             })),
                         )
                     },
@@ -405,7 +418,7 @@ where
                             let arr_group = _slice_from_offsets(ca, first, len);
                             // unwrap checked with invalid quantile check
                             arr_group
-                                ._quantile(quantile, method)
+                                ._quantile(quantile, interpol)
                                 .unwrap_unchecked()
                                 .map(|flt| NumCast::from(flt).unwrap_unchecked())
                         },
@@ -437,79 +450,8 @@ where
             })
         },
         GroupsProxy::Slice { .. } => {
-            agg_quantile_generic::<T, K>(ca, groups, 0.5, QuantileMethod::Linear)
+            agg_quantile_generic::<T, K>(ca, groups, 0.5, QuantileInterpolOptions::Linear)
         },
-    }
-}
-
-/// # Safety
-///
-/// No bounds checks on `groups`.
-#[cfg(feature = "bitwise")]
-unsafe fn bitwise_agg<T: PolarsNumericType>(
-    ca: &ChunkedArray<T>,
-    groups: &GroupsProxy,
-    f: fn(&ChunkedArray<T>) -> Option<T::Native>,
-) -> Series
-where
-    ChunkedArray<T>:
-        ChunkTakeUnchecked<[IdxSize]> + ChunkBitwiseReduce<Physical = T::Native> + IntoSeries,
-{
-    // Prevent a rechunk for every individual group.
-    let s = if groups.len() > 1 {
-        ca.rechunk()
-    } else {
-        ca.clone()
-    };
-
-    match groups {
-        GroupsProxy::Idx(groups) => agg_helper_idx_on_all::<T, _>(groups, |idx| {
-            debug_assert!(idx.len() <= s.len());
-            if idx.is_empty() {
-                None
-            } else {
-                let take = unsafe { s.take_unchecked(idx) };
-                f(&take)
-            }
-        }),
-        GroupsProxy::Slice { groups, .. } => _agg_helper_slice::<T, _>(groups, |[first, len]| {
-            debug_assert!(len <= s.len() as IdxSize);
-            if len == 0 {
-                None
-            } else {
-                let take = _slice_from_offsets(&s, first, len);
-                f(&take)
-            }
-        }),
-    }
-}
-
-#[cfg(feature = "bitwise")]
-impl<T> ChunkedArray<T>
-where
-    T: PolarsNumericType,
-    ChunkedArray<T>:
-        ChunkTakeUnchecked<[IdxSize]> + ChunkBitwiseReduce<Physical = T::Native> + IntoSeries,
-{
-    /// # Safety
-    ///
-    /// No bounds checks on `groups`.
-    pub(crate) unsafe fn agg_and(&self, groups: &GroupsProxy) -> Series {
-        unsafe { bitwise_agg(self, groups, ChunkBitwiseReduce::and_reduce) }
-    }
-
-    /// # Safety
-    ///
-    /// No bounds checks on `groups`.
-    pub(crate) unsafe fn agg_or(&self, groups: &GroupsProxy) -> Series {
-        unsafe { bitwise_agg(self, groups, ChunkBitwiseReduce::or_reduce) }
-    }
-
-    /// # Safety
-    ///
-    /// No bounds checks on `groups`.
-    pub(crate) unsafe fn agg_xor(&self, groups: &GroupsProxy) -> Series {
-        unsafe { bitwise_agg(self, groups, ChunkBitwiseReduce::xor_reduce) }
     }
 }
 
@@ -855,14 +797,14 @@ where
                         None => _rolling_apply_agg_window_no_nulls::<VarWindow<_>, _, _>(
                             values,
                             offset_iter,
-                            Some(RollingFnParams::Var(RollingVarParams { ddof })),
+                            Some(Arc::new(RollingVarParams { ddof })),
                         ),
                         Some(validity) => {
                             _rolling_apply_agg_window_nulls::<rolling::nulls::VarWindow<_>, _, _>(
                                 values,
                                 validity,
                                 offset_iter,
-                                Some(RollingFnParams::Var(RollingVarParams { ddof })),
+                                Some(Arc::new(RollingVarParams { ddof })),
                             )
                         },
                     };
@@ -920,14 +862,14 @@ where
                         None => _rolling_apply_agg_window_no_nulls::<VarWindow<_>, _, _>(
                             values,
                             offset_iter,
-                            Some(RollingFnParams::Var(RollingVarParams { ddof })),
+                            Some(Arc::new(RollingVarParams { ddof })),
                         ),
                         Some(validity) => {
                             _rolling_apply_agg_window_nulls::<rolling::nulls::VarWindow<_>, _, _>(
                                 values,
                                 validity,
                                 offset_iter,
-                                Some(RollingFnParams::Var(RollingVarParams { ddof })),
+                                Some(Arc::new(RollingVarParams { ddof })),
                             )
                         },
                     };
@@ -964,9 +906,9 @@ impl Float32Chunked {
         &self,
         groups: &GroupsProxy,
         quantile: f64,
-        method: QuantileMethod,
+        interpol: QuantileInterpolOptions,
     ) -> Series {
-        agg_quantile_generic::<_, Float32Type>(self, groups, quantile, method)
+        agg_quantile_generic::<_, Float32Type>(self, groups, quantile, interpol)
     }
     pub(crate) unsafe fn agg_median(&self, groups: &GroupsProxy) -> Series {
         agg_median_generic::<_, Float32Type>(self, groups)
@@ -977,9 +919,9 @@ impl Float64Chunked {
         &self,
         groups: &GroupsProxy,
         quantile: f64,
-        method: QuantileMethod,
+        interpol: QuantileInterpolOptions,
     ) -> Series {
-        agg_quantile_generic::<_, Float64Type>(self, groups, quantile, method)
+        agg_quantile_generic::<_, Float64Type>(self, groups, quantile, interpol)
     }
     pub(crate) unsafe fn agg_median(&self, groups: &GroupsProxy) -> Series {
         agg_median_generic::<_, Float64Type>(self, groups)
@@ -1171,9 +1113,9 @@ where
         &self,
         groups: &GroupsProxy,
         quantile: f64,
-        method: QuantileMethod,
+        interpol: QuantileInterpolOptions,
     ) -> Series {
-        agg_quantile_generic::<_, Float64Type>(self, groups, quantile, method)
+        agg_quantile_generic::<_, Float64Type>(self, groups, quantile, interpol)
     }
     pub(crate) unsafe fn agg_median(&self, groups: &GroupsProxy) -> Series {
         agg_median_generic::<_, Float64Type>(self, groups)

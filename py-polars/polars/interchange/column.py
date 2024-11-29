@@ -34,7 +34,7 @@ class PolarsColumn(Column):
         a RuntimeError will be raised if data would be copied.
     """
 
-    def __init__(self, column: Series, *, allow_copy: bool = True) -> None:
+    def __init__(self, column: Series, *, allow_copy: bool = True):
         self._col = column
         self._allow_copy = allow_copy
 

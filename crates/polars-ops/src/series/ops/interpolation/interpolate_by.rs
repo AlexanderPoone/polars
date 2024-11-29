@@ -263,29 +263,29 @@ where
     }
 }
 
-pub fn interpolate_by(s: &Column, by: &Column, by_is_sorted: bool) -> PolarsResult<Column> {
+pub fn interpolate_by(s: &Series, by: &Series, by_is_sorted: bool) -> PolarsResult<Series> {
     polars_ensure!(s.len() == by.len(), InvalidOperation: "`by` column must be the same length as Series ({}), got {}", s.len(), by.len());
 
     fn func<T, F>(
         ca: &ChunkedArray<T>,
         by: &ChunkedArray<F>,
         is_sorted: bool,
-    ) -> PolarsResult<Column>
+    ) -> PolarsResult<Series>
     where
         T: PolarsNumericType,
         F: PolarsNumericType,
-        ChunkedArray<T>: IntoColumn,
+        ChunkedArray<T>: IntoSeries,
     {
         if is_sorted {
             interpolate_impl_by_sorted(ca, by, |y_start, y_end, x, out| unsafe {
                 signed_interp_by_sorted(y_start, y_end, x, out)
             })
-            .map(|x| x.into_column())
+            .map(|x| x.into_series())
         } else {
             interpolate_impl_by(ca, by, |y_start, y_end, x, out, sorting_indices| unsafe {
                 signed_interp_by(y_start, y_end, x, out, sorting_indices)
             })
-            .map(|x| x.into_column())
+            .map(|x| x.into_series())
         }
     }
 

@@ -1,4 +1,4 @@
-use polars_parquet_format::Statistics as ParquetStatistics;
+use parquet_format_safe::Statistics as ParquetStatistics;
 
 use crate::parquet::error::{ParquetError, ParquetResult};
 use crate::parquet::schema::types::PrimitiveType;
@@ -54,10 +54,8 @@ impl FixedLenStatistics {
             distinct_count: self.distinct_count,
             max_value: self.max_value.clone(),
             min_value: self.min_value.clone(),
-            max: None,
             min: None,
-            is_max_value_exact: None,
-            is_min_value_exact: None,
+            max: None,
         }
     }
 }

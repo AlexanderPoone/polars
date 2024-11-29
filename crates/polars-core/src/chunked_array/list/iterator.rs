@@ -2,6 +2,8 @@ use std::marker::PhantomData;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
+use polars_utils::unwrap::UnwrapUncheckedRelease;
+
 use crate::prelude::*;
 use crate::series::amortized_iter::{unstable_series_container_and_ptr, AmortSeries, ArrayBox};
 
@@ -16,7 +18,7 @@ pub struct AmortizedListIter<'a, I: Iterator<Item = Option<ArrayBox>>> {
     inner_dtype: DataType,
 }
 
-impl<I: Iterator<Item = Option<ArrayBox>>> AmortizedListIter<'_, I> {
+impl<'a, I: Iterator<Item = Option<ArrayBox>>> AmortizedListIter<'a, I> {
     pub(crate) unsafe fn new(
         len: usize,
         series_container: Series,
@@ -35,7 +37,7 @@ impl<I: Iterator<Item = Option<ArrayBox>>> AmortizedListIter<'_, I> {
     }
 }
 
-impl<I: Iterator<Item = Option<ArrayBox>>> Iterator for AmortizedListIter<'_, I> {
+impl<'a, I: Iterator<Item = Option<ArrayBox>>> Iterator for AmortizedListIter<'a, I> {
     type Item = Option<AmortSeries>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -76,8 +78,9 @@ impl<I: Iterator<Item = Option<ArrayBox>>> Iterator for AmortizedListIter<'_, I>
                     self.inner = NonNull::new(ptr).unwrap();
                 } else {
                     // SAFETY: we checked the RC above;
-                    let series_mut =
-                        unsafe { Rc::get_mut(&mut self.series_container).unwrap_unchecked() };
+                    let series_mut = unsafe {
+                        Rc::get_mut(&mut self.series_container).unwrap_unchecked_release()
+                    };
                     // update the inner state
                     unsafe { *self.inner.as_mut() = array_ref };
 
@@ -103,8 +106,7 @@ impl<I: Iterator<Item = Option<ArrayBox>>> Iterator for AmortizedListIter<'_, I>
 
 // # Safety
 // we correctly implemented size_hint
-unsafe impl<I: Iterator<Item = Option<ArrayBox>>> TrustedLen for AmortizedListIter<'_, I> {}
-impl<I: Iterator<Item = Option<ArrayBox>>> ExactSizeIterator for AmortizedListIter<'_, I> {}
+unsafe impl<'a, I: Iterator<Item = Option<ArrayBox>>> TrustedLen for AmortizedListIter<'a, I> {}
 
 impl ListChunked {
     /// This is an iterator over a [`ListChunked`] that saves allocations.
@@ -149,7 +151,7 @@ impl ListChunked {
         let (s, ptr) =
             unsafe { unstable_series_container_and_ptr(name, inner_values.clone(), &iter_dtype) };
 
-        // SAFETY: ptr belongs the Series..
+        // SAFETY: ptr belongs the the Series..
         unsafe {
             AmortizedListIter::new(
                 self.len(),
@@ -390,7 +392,7 @@ mod test {
 
     #[test]
     fn test_iter_list() {
-        let mut builder = get_list_builder(&DataType::Int32, 10, 10, PlSmallStr::EMPTY);
+        let mut builder = get_list_builder(&DataType::Int32, 10, 10, PlSmallStr::EMPTY).unwrap();
         builder
             .append_series(&Series::new(PlSmallStr::EMPTY, &[1, 2, 3]))
             .unwrap();

@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Any, Awaitable, Generator, Generic, TypeVar
 
 from polars._utils.wrap import wrap_df
 from polars.dependencies import _GEVENT_AVAILABLE
 
 if TYPE_CHECKING:
     from asyncio.futures import Future
-    from collections.abc import Generator
 
     from polars.polars import PyDataFrame
 
@@ -17,7 +15,7 @@ T = TypeVar("T")
 
 
 class _GeventDataFrameResult(Generic[T]):
-    __slots__ = ("_result", "_value", "_watcher")
+    __slots__ = ("_watcher", "_value", "_result")
 
     def __init__(self) -> None:
         if not _GEVENT_AVAILABLE:

@@ -13,7 +13,6 @@ pub mod dataframe;
 pub mod datatypes;
 pub mod error;
 pub mod exceptions;
-pub mod export;
 pub mod expr;
 pub mod file;
 #[cfg(feature = "pymethods")]

@@ -88,7 +88,7 @@ impl private::PrivateSeries for SeriesWrap<BinaryChunked> {
 
     fn arg_sort_multiple(
         &self,
-        by: &[Column],
+        by: &[Series],
         options: &SortMultipleOptions,
     ) -> PolarsResult<IdxCa> {
         self.0.arg_sort_multiple(by, options)
@@ -212,11 +212,6 @@ impl SeriesTrait for SeriesWrap<BinaryChunked> {
     #[cfg(feature = "algorithm_group_by")]
     fn arg_unique(&self) -> PolarsResult<IdxCa> {
         ChunkUnique::arg_unique(&self.0)
-    }
-
-    #[cfg(feature = "approx_unique")]
-    fn approx_n_unique(&self) -> PolarsResult<IdxSize> {
-        Ok(ChunkApproxNUnique::approx_n_unique(&self.0))
     }
 
     fn is_null(&self) -> BooleanChunked {

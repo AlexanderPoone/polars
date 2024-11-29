@@ -28,16 +28,16 @@ if TYPE_CHECKING:
             "adbc",
             True,
             marks=pytest.mark.skipif(
-                sys.platform == "win32",
-                reason="adbc not available on Windows",
+                sys.version_info < (3, 9) or sys.platform == "win32",
+                reason="adbc not available on Windows or <= Python 3.8",
             ),
         ),
         pytest.param(
             "adbc",
             False,
             marks=pytest.mark.skipif(
-                sys.platform == "win32",
-                reason="adbc not available on Windows",
+                sys.version_info < (3, 9) or sys.platform == "win32",
+                reason="adbc not available on Windows or <= Python 3.8",
             ),
         ),
     ],

@@ -1,7 +1,6 @@
 //! Type agnostic columnar data structure.
-pub use crate::prelude::ChunkCompareEq;
+pub use crate::prelude::ChunkCompare;
 use crate::prelude::*;
-use crate::{HEAD_DEFAULT_LENGTH, TAIL_DEFAULT_LENGTH};
 
 pub mod amortized_iter;
 mod any_value;
@@ -23,7 +22,6 @@ use arrow::offset::Offsets;
 pub use from::*;
 pub use iterator::{SeriesIter, SeriesPhysIter};
 use num_traits::NumCast;
-use polars_utils::itertools::Itertools;
 pub use series_trait::{IsSorted, *};
 
 use crate::chunked_array::cast::CastOptions;
@@ -91,11 +89,10 @@ use crate::POOL;
 ///     .all(|(a, b)| a == *b))
 /// ```
 ///
-/// See all the comparison operators in the [ChunkCompareEq trait](crate::chunked_array::ops::ChunkCompareEq) and
-/// [ChunkCompareIneq trait](crate::chunked_array::ops::ChunkCompareIneq).
+/// See all the comparison operators in the [CmpOps trait](crate::chunked_array::ops::ChunkCompare)
 ///
 /// ## Iterators
-/// The Series variants contain differently typed [ChunkedArray](crate::chunked_array::ChunkedArray)s.
+/// The Series variants contain differently typed [ChunkedArray's](crate::chunked_array::ChunkedArray).
 /// These structs can be turned into iterators, making it possible to use any function/ closure you want
 /// on a Series.
 ///
@@ -194,13 +191,6 @@ impl Series {
         ca.chunks_mut()
     }
 
-    pub fn into_chunks(mut self) -> Vec<ArrayRef> {
-        let ca = self._get_inner_mut();
-        let chunks = std::mem::take(unsafe { ca.chunks_mut() });
-        ca.compute_len();
-        chunks
-    }
-
     // TODO! this probably can now be removed, now we don't have special case for structs.
     pub fn select_chunk(&self, i: usize) -> Self {
         let mut new = self.clear();
@@ -265,7 +255,7 @@ impl Series {
 
     pub fn into_frame(self) -> DataFrame {
         // SAFETY: A single-column dataframe cannot have length mismatches or duplicate names
-        unsafe { DataFrame::new_no_checks(self.len(), vec![self.into()]) }
+        unsafe { DataFrame::new_no_checks(vec![self]) }
     }
 
     /// Rename series.
@@ -304,6 +294,11 @@ impl Series {
 
     pub fn from_arrow(name: PlSmallStr, array: ArrayRef) -> PolarsResult<Series> {
         Self::try_from((name, array))
+    }
+
+    #[cfg(feature = "arrow_rs")]
+    pub fn from_arrow_rs(name: PlSmallStr, array: &dyn arrow_array::Array) -> PolarsResult<Series> {
+        Self::from_arrow(name, array.into())
     }
 
     /// Shrink the capacity of this array to fit its length.
@@ -372,7 +367,7 @@ impl Series {
         self.cast_with_options(dtype, CastOptions::NonStrict)
     }
 
-    /// Cast [`Series`] to another [`DataType`].
+    /// Cast `[Series]` to another `[DataType]`.
     pub fn cast_with_options(&self, dtype: &DataType, options: CastOptions) -> PolarsResult<Self> {
         use DataType as D;
 
@@ -468,7 +463,6 @@ impl Series {
     /// Cast from physical to logical types without any checks on the validity of the cast.
     ///
     /// # Safety
-    ///
     /// This can lead to invalid memory access in downstream code.
     pub unsafe fn cast_unchecked(&self, dtype: &DataType) -> PolarsResult<Self> {
         match self.dtype() {
@@ -553,7 +547,7 @@ impl Series {
         }
     }
 
-    /// Check if float value is NaN (note this is different than missing/null)
+    /// Check if float value is NaN (note this is different than missing/ null)
     pub fn is_not_nan(&self) -> PolarsResult<BooleanChunked> {
         match self.dtype() {
             DataType::Float32 => Ok(self.f32().unwrap().is_not_nan()),
@@ -598,17 +592,15 @@ impl Series {
         lhs.zip_with_same_type(mask, rhs.as_ref())
     }
 
-    /// Converts a Series to their physical representation, if they have one,
-    /// otherwise the series is left unchanged.
+    /// Cast a datelike Series to their physical representation.
+    /// Primitives remain unchanged
     ///
     /// * Date -> Int32
-    /// * Datetime -> Int64
-    /// * Duration -> Int64
+    /// * Datetime-> Int64
     /// * Time -> Int64
     /// * Categorical -> UInt32
     /// * List(inner) -> List(physical of inner)
-    /// * Array(inner) -> Array(physical of inner)
-    /// * Struct -> Struct with physical repr of each struct column
+    ///
     pub fn to_physical_repr(&self) -> Cow<Series> {
         use DataType::*;
         match self.dtype() {
@@ -628,11 +620,6 @@ impl Series {
                 Cow::Owned(ca.physical().clone().into_series())
             },
             List(inner) => Cow::Owned(self.cast(&List(Box::new(inner.to_physical()))).unwrap()),
-            #[cfg(feature = "dtype-array")]
-            Array(inner, size) => Cow::Owned(
-                self.cast(&Array(Box::new(inner.to_physical()), *size))
-                    .unwrap(),
-            ),
             #[cfg(feature = "dtype-struct")]
             Struct(_) => {
                 let arr = self.struct_().unwrap();
@@ -641,9 +628,7 @@ impl Series {
                     .iter()
                     .map(|s| s.to_physical_repr().into_owned())
                     .collect();
-                let mut ca =
-                    StructChunked::from_series(self.name().clone(), arr.len(), fields.iter())
-                        .unwrap();
+                let mut ca = StructChunked::from_series(self.name().clone(), &fields).unwrap();
 
                 if arr.null_count() > 0 {
                     ca.zip_outer_validity(arr);
@@ -654,73 +639,12 @@ impl Series {
         }
     }
 
-    /// Attempts to convert a Series to dtype, only allowing conversions from
-    /// physical to logical dtypes--the inverse of to_physical_repr().
+    /// Take by index if ChunkedArray contains a single chunk.
     ///
     /// # Safety
-    /// When converting from UInt32 to Categorical it is not checked that the
-    /// values are in-bound for the categorical mapping.
-    pub unsafe fn to_logical_repr_unchecked(&self, dtype: &DataType) -> PolarsResult<Series> {
-        use DataType::*;
-
-        let err = || {
-            Err(
-                polars_err!(ComputeError: "can't cast from {} to {} in to_logical_repr_unchecked", self.dtype(), dtype),
-            )
-        };
-
-        match dtype {
-            dt if self.dtype() == dt => Ok(self.clone()),
-            #[cfg(feature = "dtype-date")]
-            Date => Ok(self.i32()?.clone().into_date().into_series()),
-            #[cfg(feature = "dtype-datetime")]
-            Datetime(u, z) => Ok(self
-                .i64()?
-                .clone()
-                .into_datetime(*u, z.clone())
-                .into_series()),
-            #[cfg(feature = "dtype-duration")]
-            Duration(u) => Ok(self.i64()?.clone().into_duration(*u).into_series()),
-            #[cfg(feature = "dtype-time")]
-            Time => Ok(self.i64()?.clone().into_time().into_series()),
-            #[cfg(feature = "dtype-categorical")]
-            Categorical { .. } | Enum { .. } => {
-                Ok(CategoricalChunked::from_cats_and_dtype_unchecked(
-                    self.u32()?.clone(),
-                    dtype.clone(),
-                )
-                .into_series())
-            },
-            List(inner) => {
-                if let List(self_inner) = self.dtype() {
-                    if inner.to_physical() == **self_inner {
-                        return self.cast(dtype);
-                    }
-                }
-                err()
-            },
-            #[cfg(feature = "dtype-struct")]
-            Struct(target_fields) => {
-                let ca = self.struct_().unwrap();
-                if ca.struct_fields().len() != target_fields.len() {
-                    return err();
-                }
-                let fields = ca
-                    .fields_as_series()
-                    .iter()
-                    .zip(target_fields)
-                    .map(|(s, tf)| s.to_logical_repr_unchecked(tf.dtype()))
-                    .try_collect_vec()?;
-                let mut result =
-                    StructChunked::from_series(self.name().clone(), ca.len(), fields.iter())?;
-                if ca.null_count() > 0 {
-                    result.zip_outer_validity(ca);
-                }
-                Ok(result.into_series())
-            },
-
-            _ => err(),
-        }
+    /// This doesn't check any bounds. Null validity is checked.
+    pub unsafe fn take_unchecked_from_slice(&self, idx: &[IdxSize]) -> Series {
+        self.take_slice_unchecked(idx)
     }
 
     /// Traverse and collect every nth element in a new array.
@@ -786,6 +710,10 @@ impl Series {
 
     #[cfg(feature = "dtype-time")]
     pub(crate) fn into_time(self) -> Series {
+        #[cfg(not(feature = "dtype-time"))]
+        {
+            panic!("activate feature dtype-time")
+        }
         match self.dtype() {
             DataType::Int64 => self.i64().unwrap().clone().into_time().into_series(),
             DataType::Time => self
@@ -871,18 +799,35 @@ impl Series {
 
     // used for formatting
     pub fn str_value(&self, index: usize) -> PolarsResult<Cow<str>> {
-        Ok(self.0.get(index)?.str_value())
+        let out = match self.0.get(index)? {
+            AnyValue::String(s) => Cow::Borrowed(s),
+            AnyValue::Null => Cow::Borrowed("null"),
+            #[cfg(feature = "dtype-categorical")]
+            AnyValue::Categorical(idx, rev, arr) | AnyValue::Enum(idx, rev, arr) => {
+                if arr.is_null() {
+                    Cow::Borrowed(rev.get(idx))
+                } else {
+                    unsafe { Cow::Borrowed(arr.deref_unchecked().value(idx as usize)) }
+                }
+            },
+            av => Cow::Owned(format!("{av}")),
+        };
+        Ok(out)
     }
     /// Get the head of the Series.
     pub fn head(&self, length: Option<usize>) -> Series {
-        let len = length.unwrap_or(HEAD_DEFAULT_LENGTH);
-        self.slice(0, std::cmp::min(len, self.len()))
+        match length {
+            Some(len) => self.slice(0, std::cmp::min(len, self.len())),
+            None => self.slice(0, std::cmp::min(10, self.len())),
+        }
     }
 
     /// Get the tail of the Series.
     pub fn tail(&self, length: Option<usize>) -> Series {
-        let len = length.unwrap_or(TAIL_DEFAULT_LENGTH);
-        let len = std::cmp::min(len, self.len());
+        let len = match length {
+            Some(len) => std::cmp::min(len, self.len()),
+            None => std::cmp::min(10, self.len()),
+        };
         self.slice(-(len as i64), len)
     }
 
@@ -896,17 +841,6 @@ impl Series {
         let idx = self.arg_unique()?;
         // SAFETY: Indices are in bounds.
         unsafe { Ok(self.take_unchecked(&idx)) }
-    }
-
-    pub fn try_idx(&self) -> Option<&IdxCa> {
-        #[cfg(feature = "bigidx")]
-        {
-            self.try_u64()
-        }
-        #[cfg(not(feature = "bigidx"))]
-        {
-            self.try_u32()
-        }
     }
 
     pub fn idx(&self) -> PolarsResult<&IdxCa> {
@@ -944,7 +878,8 @@ impl Series {
             DataType::Categorical(Some(rv), _) | DataType::Enum(Some(rv), _) => match &**rv {
                 RevMapping::Local(arr, _) => size += estimated_bytes_size(arr),
                 RevMapping::Global(map, arr, _) => {
-                    size += map.capacity() * size_of::<u32>() * 2 + estimated_bytes_size(arr);
+                    size +=
+                        map.capacity() * std::mem::size_of::<u32>() * 2 + estimated_bytes_size(arr);
                 },
             },
             _ => {},
@@ -1002,7 +937,7 @@ fn equal_outer_type<T: 'static + PolarsDataType>(dtype: &DataType) -> bool {
     }
 }
 
-impl<T> AsRef<ChunkedArray<T>> for dyn SeriesTrait + '_
+impl<'a, T> AsRef<ChunkedArray<T>> for dyn SeriesTrait + 'a
 where
     T: 'static + PolarsDataType,
 {
@@ -1019,7 +954,7 @@ where
     }
 }
 
-impl<T> AsMut<ChunkedArray<T>> for dyn SeriesTrait + '_
+impl<'a, T> AsMut<ChunkedArray<T>> for dyn SeriesTrait + 'a
 where
     T: 'static + PolarsDataType,
 {

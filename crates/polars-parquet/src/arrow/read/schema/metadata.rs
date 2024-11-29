@@ -35,7 +35,6 @@ fn convert_dtype(mut dtype: ArrowDataType) -> ArrowDataType {
                 convert_field(field);
             }
         },
-        Float16 => dtype = Float32,
         Binary | LargeBinary => dtype = BinaryView,
         Utf8 | LargeUtf8 => dtype = Utf8View,
         Dictionary(_, ref mut dtype, _) | Extension(_, ref mut dtype, _) => {

@@ -132,7 +132,7 @@ impl private::PrivateSeries for SeriesWrap<DateChunked> {
 
     fn arg_sort_multiple(
         &self,
-        by: &[Column],
+        by: &[Series],
         options: &SortMultipleOptions,
     ) -> PolarsResult<IdxCa> {
         self.0.deref().arg_sort_multiple(by, options)
@@ -142,14 +142,6 @@ impl private::PrivateSeries for SeriesWrap<DateChunked> {
 impl SeriesTrait for SeriesWrap<DateChunked> {
     fn rename(&mut self, name: PlSmallStr) {
         self.0.rename(name);
-    }
-
-    fn get_metadata(&self) -> Option<RwLockReadGuard<dyn MetadataTrait>> {
-        self.0.metadata_dyn()
-    }
-
-    fn boxed_metadata<'a>(&'a self) -> Option<Box<dyn MetadataTrait + 'a>> {
-        Some(self.0.boxed_metadata_dyn())
     }
 
     fn chunk_lengths(&self) -> ChunkLenIter {
@@ -328,13 +320,13 @@ impl SeriesTrait for SeriesWrap<DateChunked> {
 
     fn max_reduce(&self) -> PolarsResult<Scalar> {
         let sc = self.0.max_reduce();
-        let av = sc.value().cast(self.dtype()).into_static();
+        let av = sc.value().cast(self.dtype()).into_static().unwrap();
         Ok(Scalar::new(self.dtype().clone(), av))
     }
 
     fn min_reduce(&self) -> PolarsResult<Scalar> {
         let sc = self.0.min_reduce();
-        let av = sc.value().cast(self.dtype()).into_static();
+        let av = sc.value().cast(self.dtype()).into_static().unwrap();
         Ok(Scalar::new(self.dtype().clone(), av))
     }
 

@@ -7,7 +7,7 @@ use super::make_mutable;
 #[derive(Debug)]
 pub struct DynMutableStructArray {
     dtype: ArrowDataType,
-    inner: Vec<Box<dyn MutableArray>>,
+    pub inner: Vec<Box<dyn MutableArray>>,
 }
 
 impl DynMutableStructArray {
@@ -16,9 +16,6 @@ impl DynMutableStructArray {
             ArrowDataType::Struct(inner) => inner,
             _ => unreachable!(),
         };
-
-        assert!(!inners.is_empty());
-
         let inner = inners
             .iter()
             .map(|f| make_mutable(f.dtype(), capacity))
@@ -26,12 +23,7 @@ impl DynMutableStructArray {
 
         Ok(Self { dtype, inner })
     }
-
-    pub fn inner_mut(&mut self) -> &mut [Box<dyn MutableArray>] {
-        &mut self.inner
-    }
 }
-
 impl MutableArray for DynMutableStructArray {
     fn dtype(&self) -> &ArrowDataType {
         &self.dtype
@@ -46,9 +38,9 @@ impl MutableArray for DynMutableStructArray {
     }
 
     fn as_box(&mut self) -> Box<dyn Array> {
-        let len = self.len();
         let inner = self.inner.iter_mut().map(|x| x.as_box()).collect();
-        Box::new(StructArray::new(self.dtype.clone(), len, inner, None))
+
+        Box::new(StructArray::new(self.dtype.clone(), inner, None))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

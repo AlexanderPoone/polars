@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
 use std::cmp::Ordering::{Greater, Less};
 
+use crate::slice::GetSaferUnchecked;
+
 /// Find the index of the first element of `arr` that is greater
 /// or equal to `val`.
 /// Assumes that `arr` is sorted.
@@ -57,7 +59,7 @@ impl<T: std::fmt::Debug> ExponentialSearch<T> for &[T] {
         while bound < self.len() {
             // SAFETY
             // Bound is always >=0 and < len.
-            let cmp = f(unsafe { self.get_unchecked(bound) });
+            let cmp = f(unsafe { self.get_unchecked_release(bound) });
 
             if cmp == Greater {
                 break;
@@ -69,7 +71,7 @@ impl<T: std::fmt::Debug> ExponentialSearch<T> for &[T] {
         // We checked the end bound and previous bound was within slice as per the `while` condition.
         let prev_bound = bound / 2;
 
-        let slice = unsafe { self.get_unchecked(prev_bound..end_bound) };
+        let slice = unsafe { self.get_unchecked_release(prev_bound..end_bound) };
 
         match slice.binary_search_by(f) {
             Ok(i) => Ok(i + prev_bound),

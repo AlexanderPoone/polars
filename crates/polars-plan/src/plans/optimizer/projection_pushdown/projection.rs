@@ -1,7 +1,7 @@
 use super::*;
 
 #[inline]
-pub(super) fn is_count(node: Node, expr_arena: &Arena<AExpr>) -> bool {
+fn is_count(node: Node, expr_arena: &Arena<AExpr>) -> bool {
     matches!(expr_arena.get(node), AExpr::Len)
 }
 
@@ -54,8 +54,6 @@ pub(super) fn process_projection(
     projections_seen: usize,
     lp_arena: &mut Arena<IR>,
     expr_arena: &mut Arena<AExpr>,
-    // Whether is SimpleProjection.
-    simple: bool,
 ) -> PolarsResult<IR> {
     let mut local_projection = Vec::with_capacity(exprs.len());
 
@@ -67,66 +65,25 @@ pub(super) fn process_projection(
         let expr = if input_schema.is_empty() {
             // If the input schema is empty, we should just project
             // ourselves
-            Some(exprs[0].node())
+            exprs[0].node()
         } else {
-            // Select the last column projection.
-            let mut name = None;
-            for (_, plan) in (&*lp_arena).iter(input) {
-                match plan {
-                    IR::Select { expr: exprs, .. } | IR::HStack { exprs, .. } => {
-                        for e in exprs {
-                            if !e.is_scalar(expr_arena) {
-                                name = Some(e.output_name());
-                                break;
-                            }
-                        }
-                    },
-                    IR::Scan {
-                        file_info,
-                        output_schema,
-                        ..
-                    } => {
-                        let schema = output_schema.as_ref().unwrap_or(&file_info.schema);
-                        // NOTE: the first can be the inserted index column, so that might not work
-                        let (last_name, _) = schema.try_get_at_index(schema.len() - 1)?;
-                        name = Some(last_name);
-                        break;
-                    },
-                    IR::DataFrameScan {
-                        schema,
-                        output_schema,
-                        ..
-                    } => {
-                        // NOTE: the first can be the inserted index column, so that might not work
-                        let schema = output_schema.as_ref().unwrap_or(schema);
-                        let (last_name, _) = schema.try_get_at_index(schema.len() - 1)?;
-                        name = Some(last_name);
-                        break;
-                    },
-                    _ => {},
-                }
+            // simply select the last column
+            // NOTE: the first can be the inserted index column, so that might not work
+            let (first_name, _) = input_schema.try_get_at_index(input_schema.len() - 1)?;
+            let expr = expr_arena.add(AExpr::Column(first_name.clone()));
+            if !acc_projections.is_empty() {
+                check_double_projection(
+                    &exprs[0],
+                    expr_arena,
+                    &mut acc_projections,
+                    &mut projected_names,
+                );
             }
-
-            if let Some(name) = name {
-                let expr = expr_arena.add(AExpr::Column(name.clone()));
-                if !acc_projections.is_empty() {
-                    check_double_projection(
-                        &exprs[0],
-                        expr_arena,
-                        &mut acc_projections,
-                        &mut projected_names,
-                    );
-                }
-                Some(expr)
-            } else {
-                None
-            }
+            expr
         };
-        if let Some(expr) = expr {
-            add_expr_to_accumulated(expr, &mut acc_projections, &mut projected_names, expr_arena);
-            local_projection.push(exprs.pop().unwrap());
-            proj_pd.is_count_star = true;
-        }
+        add_expr_to_accumulated(expr, &mut acc_projections, &mut projected_names, expr_arena);
+        local_projection.push(exprs.pop().unwrap());
+        proj_pd.is_count_star = true;
     } else {
         // A projection can consist of a chain of expressions followed by an alias.
         // We want to do the chain locally because it can have complicated side effects.
@@ -173,14 +130,7 @@ pub(super) fn process_projection(
     )?;
 
     let builder = IRBuilder::new(input, expr_arena, lp_arena);
-
-    let lp = if !local_projection.is_empty() && simple {
-        builder
-            .project_simple_nodes(local_projection.into_iter().map(|e| e.node()))?
-            .build()
-    } else {
-        proj_pd.finish_node(local_projection, builder)
-    };
+    let lp = proj_pd.finish_node(local_projection, builder);
 
     Ok(lp)
 }

@@ -101,7 +101,7 @@ impl<'a> RecordSerializer<'a> {
     }
 }
 
-impl FallibleStreamingIterator for RecordSerializer<'_> {
+impl<'a> FallibleStreamingIterator for RecordSerializer<'a> {
     type Item = [u8];
 
     type Error = PolarsError;

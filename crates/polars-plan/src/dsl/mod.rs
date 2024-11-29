@@ -3,6 +3,9 @@
 #[cfg(feature = "dtype-categorical")]
 pub mod cat;
 
+#[cfg(any(feature = "rolling_window", feature = "rolling_window_by"))]
+use std::any::Any;
+
 #[cfg(feature = "dtype-categorical")]
 pub use cat::*;
 #[cfg(feature = "rolling_window_by")]
@@ -13,8 +16,6 @@ mod arity;
 #[cfg(feature = "dtype-array")]
 mod array;
 pub mod binary;
-#[cfg(feature = "bitwise")]
-mod bitwise;
 #[cfg(feature = "temporal")]
 pub mod dt;
 mod expr;
@@ -45,7 +46,7 @@ use std::sync::Arc;
 pub use arity::*;
 #[cfg(feature = "dtype-array")]
 pub use array::*;
-use arrow::legacy::prelude::QuantileMethod;
+use arrow::legacy::prelude::QuantileInterpolOptions;
 pub use expr::*;
 pub use function_expr::schema::FieldsMapper;
 pub use function_expr::*;
@@ -227,11 +228,11 @@ impl Expr {
     }
 
     /// Compute the quantile per group.
-    pub fn quantile(self, quantile: Expr, method: QuantileMethod) -> Self {
+    pub fn quantile(self, quantile: Expr, interpol: QuantileInterpolOptions) -> Self {
         AggExpr::Quantile {
             expr: Arc::new(self),
             quantile: Arc::new(quantile),
-            method,
+            interpol,
         }
         .into()
     }
@@ -322,10 +323,10 @@ impl Expr {
         };
 
         self.function_with_options(
-            move |c: Column| {
-                Ok(Some(Column::new(
-                    c.name().clone(),
-                    &[c.as_materialized_series().arg_min().map(|idx| idx as u32)],
+            move |s: Series| {
+                Ok(Some(Series::new(
+                    s.name().clone(),
+                    &[s.arg_min().map(|idx| idx as u32)],
                 )))
             },
             GetOutput::from_type(IDX_DTYPE),
@@ -343,12 +344,10 @@ impl Expr {
         };
 
         self.function_with_options(
-            move |c: Column| {
-                Ok(Some(Column::new(
-                    c.name().clone(),
-                    &[c.as_materialized_series()
-                        .arg_max()
-                        .map(|idx| idx as IdxSize)],
+            move |s: Series| {
+                Ok(Some(Series::new(
+                    s.name().clone(),
+                    &[s.arg_max().map(|idx| idx as IdxSize)],
                 )))
             },
             GetOutput::from_type(IDX_DTYPE),
@@ -365,13 +364,7 @@ impl Expr {
         };
 
         self.function_with_options(
-            move |c: Column| {
-                Ok(Some(
-                    c.as_materialized_series()
-                        .arg_sort(sort_options)
-                        .into_column(),
-                ))
-            },
+            move |s: Series| Ok(Some(s.arg_sort(sort_options).into_series())),
             GetOutput::from_type(IDX_DTYPE),
             options,
         )
@@ -542,13 +535,13 @@ impl Expr {
     /// the correct output_type. If None given the output type of the input expr is used.
     pub fn map<F>(self, function: F, output_type: GetOutput) -> Self
     where
-        F: Fn(Column) -> PolarsResult<Option<Column>> + 'static + Send + Sync,
+        F: Fn(Series) -> PolarsResult<Option<Series>> + 'static + Send + Sync,
     {
-        let f = move |c: &mut [Column]| function(std::mem::take(&mut c[0]));
+        let f = move |s: &mut [Series]| function(std::mem::take(&mut s[0]));
 
         Expr::AnonymousFunction {
             input: vec![self],
-            function: new_column_udf(f),
+            function: SpecialEq::new(Arc::new(f)),
             output_type,
             options: FunctionOptions {
                 collect_groups: ApplyOptions::ElementWise,
@@ -575,14 +568,14 @@ impl Expr {
     /// See the [`Expr::map`] function for the differences between [`map`](Expr::map) and [`apply`](Expr::apply).
     pub fn map_many<F>(self, function: F, arguments: &[Expr], output_type: GetOutput) -> Self
     where
-        F: Fn(&mut [Column]) -> PolarsResult<Option<Column>> + 'static + Send + Sync,
+        F: Fn(&mut [Series]) -> PolarsResult<Option<Series>> + 'static + Send + Sync,
     {
         let mut input = vec![self];
         input.extend_from_slice(arguments);
 
         Expr::AnonymousFunction {
             input,
-            function: new_column_udf(function),
+            function: SpecialEq::new(Arc::new(function)),
             output_type,
             options: FunctionOptions {
                 collect_groups: ApplyOptions::ElementWise,
@@ -601,13 +594,13 @@ impl Expr {
     ///  * `map_list` should be used when the function expects a list aggregated series.
     pub fn map_list<F>(self, function: F, output_type: GetOutput) -> Self
     where
-        F: Fn(Column) -> PolarsResult<Option<Column>> + 'static + Send + Sync,
+        F: Fn(Series) -> PolarsResult<Option<Series>> + 'static + Send + Sync,
     {
-        let f = move |c: &mut [Column]| function(std::mem::take(&mut c[0]));
+        let f = move |s: &mut [Series]| function(std::mem::take(&mut s[0]));
 
         Expr::AnonymousFunction {
             input: vec![self],
-            function: new_column_udf(f),
+            function: SpecialEq::new(Arc::new(f)),
             output_type,
             options: FunctionOptions {
                 collect_groups: ApplyOptions::ApplyList,
@@ -625,13 +618,13 @@ impl Expr {
         options: FunctionOptions,
     ) -> Self
     where
-        F: Fn(Column) -> PolarsResult<Option<Column>> + 'static + Send + Sync,
+        F: Fn(Series) -> PolarsResult<Option<Series>> + 'static + Send + Sync,
     {
-        let f = move |c: &mut [Column]| function(std::mem::take(&mut c[0]));
+        let f = move |s: &mut [Series]| function(std::mem::take(&mut s[0]));
 
         Expr::AnonymousFunction {
             input: vec![self],
-            function: new_column_udf(f),
+            function: SpecialEq::new(Arc::new(f)),
             output_type,
             options,
         }
@@ -648,13 +641,13 @@ impl Expr {
     /// * `apply` should be used for operations that work on a group of data. e.g. `sum`, `count`, etc.
     pub fn apply<F>(self, function: F, output_type: GetOutput) -> Self
     where
-        F: Fn(Column) -> PolarsResult<Option<Column>> + 'static + Send + Sync,
+        F: Fn(Series) -> PolarsResult<Option<Series>> + 'static + Send + Sync,
     {
-        let f = move |c: &mut [Column]| function(std::mem::take(&mut c[0]));
+        let f = move |s: &mut [Series]| function(std::mem::take(&mut s[0]));
 
         Expr::AnonymousFunction {
             input: vec![self],
-            function: new_column_udf(f),
+            function: SpecialEq::new(Arc::new(f)),
             output_type,
             options: FunctionOptions {
                 collect_groups: ApplyOptions::GroupWise,
@@ -680,14 +673,14 @@ impl Expr {
     /// See the [`Expr::apply`] function for the differences between [`map`](Expr::map) and [`apply`](Expr::apply).
     pub fn apply_many<F>(self, function: F, arguments: &[Expr], output_type: GetOutput) -> Self
     where
-        F: Fn(&mut [Column]) -> PolarsResult<Option<Column>> + 'static + Send + Sync,
+        F: Fn(&mut [Series]) -> PolarsResult<Option<Series>> + 'static + Send + Sync,
     {
         let mut input = vec![self];
         input.extend_from_slice(arguments);
 
         Expr::AnonymousFunction {
             input,
-            function: new_column_udf(function),
+            function: SpecialEq::new(Arc::new(function)),
             output_type,
             options: FunctionOptions {
                 collect_groups: ApplyOptions::GroupWise,
@@ -836,12 +829,8 @@ impl Expr {
         };
 
         self.function_with_options(
-            move |c: Column| {
-                Some(
-                    c.product()
-                        .map(|sc| sc.into_series(c.name().clone()).into_column()),
-                )
-                .transpose()
+            move |s: Series| {
+                Some(s.product().map(|sc| sc.into_series(s.name().clone()))).transpose()
             },
             GetOutput::map_dtype(|dt| {
                 use DataType as T;
@@ -1064,11 +1053,7 @@ impl Expr {
     }
 
     pub fn fill_null_with_strategy(self, strategy: FillNullStrategy) -> Self {
-        if strategy.is_elementwise() {
-            self.map_private(FunctionExpr::FillNullWithStrategy(strategy))
-        } else {
-            self.apply_private(FunctionExpr::FillNullWithStrategy(strategy))
-        }
+        self.apply_private(FunctionExpr::FillNullWithStrategy(strategy))
     }
 
     /// Replace the floating point `NaN` values by a value.
@@ -1126,27 +1111,27 @@ impl Expr {
             })
     }
 
-    /// Bitwise "and" operation.
+    /// "and" operation.
     pub fn and<E: Into<Expr>>(self, expr: E) -> Self {
         binary_expr(self, Operator::And, expr.into())
     }
 
-    /// Bitwise "xor" operation.
+    /// "xor" operation.
     pub fn xor<E: Into<Expr>>(self, expr: E) -> Self {
         binary_expr(self, Operator::Xor, expr.into())
     }
 
-    /// Bitwise "or" operation.
+    /// "or" operation.
     pub fn or<E: Into<Expr>>(self, expr: E) -> Self {
         binary_expr(self, Operator::Or, expr.into())
     }
 
-    /// Logical "or" operation.
+    /// "or" operation.
     pub fn logical_or<E: Into<Expr>>(self, expr: E) -> Self {
         binary_expr(self, Operator::LogicalOr, expr.into())
     }
 
-    /// Logical "and" operation.
+    /// "or" operation.
     pub fn logical_and<E: Into<Expr>>(self, expr: E) -> Self {
         binary_expr(self, Operator::LogicalAnd, expr.into())
     }
@@ -1276,7 +1261,7 @@ impl Expr {
 
     /// Exclude a column from a wildcard/regex selection.
     ///
-    /// You may also use regexes in the exclude as long as they start with `^` and end with `$`.
+    /// You may also use regexes in the exclude as long as they start with `^` and end with `$`/
     pub fn exclude(self, columns: impl IntoVec<PlSmallStr>) -> Expr {
         let v = columns.into_vec().into_iter().map(Excluded::Name).collect();
         Expr::Exclude(Arc::new(self), v)
@@ -1358,14 +1343,14 @@ impl Expr {
     pub fn rolling_quantile_by(
         self,
         by: Expr,
-        method: QuantileMethod,
+        interpol: QuantileInterpolOptions,
         quantile: f64,
         mut options: RollingOptionsDynamicWindow,
     ) -> Expr {
-        options.fn_params = Some(RollingFnParams::Quantile(RollingQuantileParams {
+        options.fn_params = Some(Arc::new(RollingQuantileParams {
             prob: quantile,
-            method,
-        }));
+            interpol,
+        }) as Arc<dyn Any + Send + Sync>);
 
         self.finish_rolling_by(by, options, RollingFunctionBy::QuantileBy)
     }
@@ -1385,7 +1370,7 @@ impl Expr {
     /// Apply a rolling median based on another column.
     #[cfg(feature = "rolling_window_by")]
     pub fn rolling_median_by(self, by: Expr, options: RollingOptionsDynamicWindow) -> Expr {
-        self.rolling_quantile_by(by, QuantileMethod::Linear, 0.5, options)
+        self.rolling_quantile_by(by, QuantileInterpolOptions::Linear, 0.5, options)
     }
 
     /// Apply a rolling minimum.
@@ -1425,7 +1410,7 @@ impl Expr {
     /// See: [`RollingAgg::rolling_median`]
     #[cfg(feature = "rolling_window")]
     pub fn rolling_median(self, options: RollingOptionsFixedWindow) -> Expr {
-        self.rolling_quantile(QuantileMethod::Linear, 0.5, options)
+        self.rolling_quantile(QuantileInterpolOptions::Linear, 0.5, options)
     }
 
     /// Apply a rolling quantile.
@@ -1434,14 +1419,14 @@ impl Expr {
     #[cfg(feature = "rolling_window")]
     pub fn rolling_quantile(
         self,
-        method: QuantileMethod,
+        interpol: QuantileInterpolOptions,
         quantile: f64,
         mut options: RollingOptionsFixedWindow,
     ) -> Expr {
-        options.fn_params = Some(RollingFnParams::Quantile(RollingQuantileParams {
+        options.fn_params = Some(Arc::new(RollingQuantileParams {
             prob: quantile,
-            method,
-        }));
+            interpol,
+        }) as Arc<dyn Any + Send + Sync>);
 
         self.finish_rolling(options, RollingFunction::Quantile)
     }
@@ -1478,12 +1463,7 @@ impl Expr {
         options: RollingOptionsFixedWindow,
     ) -> Expr {
         self.apply(
-            move |c: Column| {
-                c.as_materialized_series()
-                    .rolling_map(f.as_ref(), options.clone())
-                    .map(Column::from)
-                    .map(Some)
-            },
+            move |s| s.rolling_map(f.as_ref(), options.clone()).map(Some),
             output_type,
         )
         .with_fmt("rolling_map")
@@ -1498,22 +1478,22 @@ impl Expr {
         F: 'static + FnMut(&mut Float64Chunked) -> Option<f64> + Send + Sync + Copy,
     {
         self.apply(
-            move |c: Column| {
-                let out = match c.dtype() {
-                    DataType::Float64 => c
+            move |s| {
+                let out = match s.dtype() {
+                    DataType::Float64 => s
                         .f64()
                         .unwrap()
                         .rolling_map_float(window_size, f)
-                        .map(|ca| ca.into_column()),
-                    _ => c
+                        .map(|ca| ca.into_series()),
+                    _ => s
                         .cast(&DataType::Float64)?
                         .f64()
                         .unwrap()
                         .rolling_map_float(window_size, f)
-                        .map(|ca| ca.into_column()),
+                        .map(|ca| ca.into_series()),
                 }?;
-                if let DataType::Float32 = c.dtype() {
-                    out.cast(&DataType::Float32).map(Column::from).map(Some)
+                if let DataType::Float32 = s.dtype() {
+                    out.cast(&DataType::Float32).map(Some)
                 } else {
                     Ok(Some(out))
                 }
@@ -1744,13 +1724,9 @@ impl Expr {
             })
     }
 
-    #[cfg(feature = "dtype-array")]
-    pub fn reshape(self, dimensions: &[i64]) -> Self {
-        let dimensions = dimensions
-            .iter()
-            .map(|&v| ReshapeDimension::new(v))
-            .collect();
-        self.apply_private(FunctionExpr::Reshape(dimensions))
+    pub fn reshape(self, dimensions: &[i64], nested_type: NestedType) -> Self {
+        let dimensions = dimensions.to_vec();
+        self.apply_private(FunctionExpr::Reshape(dimensions, nested_type))
     }
 
     #[cfg(feature = "ewma")]
@@ -1822,7 +1798,6 @@ impl Expr {
     #[cfg(feature = "dtype-struct")]
     /// Count all unique values and create a struct mapping value to count.
     /// (Note that it is better to turn parallel off in the aggregation context).
-    /// The name of the struct field with the counts is given by the parameter `name`.
     pub fn value_counts(self, sort: bool, parallel: bool, name: &str, normalize: bool) -> Self {
         self.apply_private(FunctionExpr::ValueCounts {
             sort,
@@ -1838,7 +1813,7 @@ impl Expr {
 
     #[cfg(feature = "unique_counts")]
     /// Returns a count of the unique values in the order of appearance.
-    /// This method differs from [`Expr::value_counts`] in that it does not return the
+    /// This method differs from [`Expr::value_counts]` in that it does not return the
     /// values, only the counts and might be faster.
     pub fn unique_counts(self) -> Self {
         self.apply_private(FunctionExpr::UniqueCounts)
@@ -1968,23 +1943,23 @@ impl Expr {
 
 /// Apply a function/closure over multiple columns once the logical plan get executed.
 ///
-/// This function is very similar to [`apply_multiple`], but differs in how it handles aggregations.
+/// This function is very similar to `[apply_mul]`, but differs in how it handles aggregations.
 ///
-///  * [`map_multiple`] should be used for operations that are independent of groups, e.g. `multiply * 2`, or `raise to the power`
-///  * [`apply_multiple`] should be used for operations that work on a group of data. e.g. `sum`, `count`, etc.
+///  * `map_mul` should be used for operations that are independent of groups, e.g. `multiply * 2`, or `raise to the power`
+///  * `apply_mul` should be used for operations that work on a group of data. e.g. `sum`, `count`, etc.
 ///
 /// It is the responsibility of the caller that the schema is correct by giving
 /// the correct output_type. If None given the output type of the input expr is used.
 pub fn map_multiple<F, E>(function: F, expr: E, output_type: GetOutput) -> Expr
 where
-    F: Fn(&mut [Column]) -> PolarsResult<Option<Column>> + 'static + Send + Sync,
+    F: Fn(&mut [Series]) -> PolarsResult<Option<Series>> + 'static + Send + Sync,
     E: AsRef<[Expr]>,
 {
     let input = expr.as_ref().to_vec();
 
     Expr::AnonymousFunction {
         input,
-        function: new_column_udf(function),
+        function: SpecialEq::new(Arc::new(function)),
         output_type,
         options: FunctionOptions {
             collect_groups: ApplyOptions::ElementWise,
@@ -1996,21 +1971,21 @@ where
 
 /// Apply a function/closure over multiple columns once the logical plan get executed.
 ///
-/// This function is very similar to [`apply_multiple`], but differs in how it handles aggregations.
+/// This function is very similar to `[apply_mul]`, but differs in how it handles aggregations.
 ///
-///  * [`map_multiple`] should be used for operations that are independent of groups, e.g. `multiply * 2`, or `raise to the power`
-///  * [`apply_multiple`] should be used for operations that work on a group of data. e.g. `sum`, `count`, etc.
-///  * [`map_list_multiple`] should be used when the function expects a list aggregated series.
+///  * `map_mul` should be used for operations that are independent of groups, e.g. `multiply * 2`, or `raise to the power`
+///  * `apply_mul` should be used for operations that work on a group of data. e.g. `sum`, `count`, etc.
+///  * `map_list_mul` should be used when the function expects a list aggregated series.
 pub fn map_list_multiple<F, E>(function: F, expr: E, output_type: GetOutput) -> Expr
 where
-    F: Fn(&mut [Column]) -> PolarsResult<Option<Column>> + 'static + Send + Sync,
+    F: Fn(&mut [Series]) -> PolarsResult<Option<Series>> + 'static + Send + Sync,
     E: AsRef<[Expr]>,
 {
     let input = expr.as_ref().to_vec();
 
     Expr::AnonymousFunction {
         input,
-        function: new_column_udf(function),
+        function: SpecialEq::new(Arc::new(function)),
         output_type,
         options: FunctionOptions {
             collect_groups: ApplyOptions::ApplyList,
@@ -2026,10 +2001,10 @@ where
 /// It is the responsibility of the caller that the schema is correct by giving
 /// the correct output_type. If None given the output type of the input expr is used.
 ///
-/// This difference with [`map_multiple`] is that [`apply_multiple`] will create a separate [`Series`] per group.
+/// This difference with `[map_mul]` is that `[apply_mul]` will create a separate `[Series]` per group.
 ///
-/// * [`map_multiple`] should be used for operations that are independent of groups, e.g. `multiply * 2`, or `raise to the power`
-/// * [`apply_multiple`] should be used for operations that work on a group of data. e.g. `sum`, `count`, etc.
+/// * `[map_mul]` should be used for operations that are independent of groups, e.g. `multiply * 2`, or `raise to the power`
+/// * `[apply_mul]` should be used for operations that work on a group of data. e.g. `sum`, `count`, etc.
 pub fn apply_multiple<F, E>(
     function: F,
     expr: E,
@@ -2037,7 +2012,7 @@ pub fn apply_multiple<F, E>(
     returns_scalar: bool,
 ) -> Expr
 where
-    F: Fn(&mut [Column]) -> PolarsResult<Option<Column>> + 'static + Send + Sync,
+    F: Fn(&mut [Series]) -> PolarsResult<Option<Series>> + 'static + Send + Sync,
     E: AsRef<[Expr]>,
 {
     let input = expr.as_ref().to_vec();
@@ -2048,7 +2023,7 @@ where
 
     Expr::AnonymousFunction {
         input,
-        function: new_column_udf(function),
+        function: SpecialEq::new(Arc::new(function)),
         output_type,
         options: FunctionOptions {
             collect_groups: ApplyOptions::GroupWise,

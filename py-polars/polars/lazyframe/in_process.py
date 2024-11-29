@@ -32,7 +32,8 @@ class InProcessQuery:
         If it is ready, a materialized DataFrame is returned.
         If it is not ready it will return `None`.
         """
-        if (out := self._inner.fetch()) is not None:
+        out = self._inner.fetch()
+        if out is not None:
             return wrap_df(out)
         else:
             return None

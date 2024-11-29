@@ -5,7 +5,6 @@ use crate::prelude::*;
 
 pub(super) struct SlicePushDown {
     streaming: bool,
-    new_streaming: bool,
     pub scratch: Vec<Node>,
 }
 
@@ -32,7 +31,7 @@ fn can_pushdown_slice_past_projections(exprs: &[ExprIR], arena: &Arena<AExpr>) -
         // `select(c = Literal([1, 2, 3]).is_in(col(a)))`, for functions like `is_in`,
         // `str.contains`, `str.contains_many` etc. - observe a column node is present
         // but the output height is not dependent on it.
-        let is_elementwise = is_streamable(expr_ir.node(), arena, Default::default());
+        let is_elementwise = is_streamable(expr_ir.node(), arena, Context::Default);
         let (has_column, literals_all_scalar) = arena.iter(expr_ir.node()).fold(
             (false, true),
             |(has_column, lit_scalar), (_node, ae)| {
@@ -60,10 +59,9 @@ fn can_pushdown_slice_past_projections(exprs: &[ExprIR], arena: &Arena<AExpr>) -
 }
 
 impl SlicePushDown {
-    pub(super) fn new(streaming: bool, new_streaming: bool) -> Self {
+    pub(super) fn new(streaming: bool) -> Self {
         Self {
             streaming,
-            new_streaming,
             scratch: vec![],
         }
     }
@@ -174,30 +172,6 @@ impl SlicePushDown {
                 mut file_options,
                 predicate,
                 scan_type: FileScan::Csv { options, cloud_options },
-            }, Some(state)) if predicate.is_none() && self.new_streaming =>  {
-                file_options.slice = Some((state.offset, state.len as usize));
-
-                let lp = Scan {
-                    sources,
-                    file_info,
-                    hive_parts,
-                    output_schema,
-                    scan_type: FileScan::Csv { options, cloud_options },
-                    file_options,
-                    predicate,
-                };
-
-                Ok(lp)
-            },
-            #[cfg(feature = "csv")]
-            (Scan {
-                sources,
-                file_info,
-                hive_parts,
-                output_schema,
-                mut file_options,
-                predicate,
-                scan_type: FileScan::Csv { options, cloud_options },
             }, Some(state)) if predicate.is_none() && state.offset >= 0 =>  {
                 file_options.slice = Some((0, state.offset as usize + state.len as usize));
 
@@ -237,32 +211,6 @@ impl SlicePushDown {
 
                 Ok(lp)
             },
-
-            #[cfg(feature = "ipc")]
-            (Scan {
-                sources,
-                file_info,
-                hive_parts,
-                output_schema,
-                mut file_options,
-                predicate,
-                scan_type: scan_type @ FileScan::Ipc { .. },
-            }, Some(state)) if self.new_streaming && predicate.is_none() =>  {
-                file_options.slice = Some((state.offset, state.len as usize));
-
-                let lp = Scan {
-                    sources,
-                    file_info,
-                    hive_parts,
-                    output_schema,
-                    scan_type,
-                    file_options,
-                    predicate,
-                };
-
-                Ok(lp)
-            },
-
             // TODO! we currently skip slice pushdown if there is a predicate.
             (Scan {
                 sources,

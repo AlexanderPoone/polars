@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Sequence
 
 from polars._utils.parse import parse_into_expression
 from polars._utils.wrap import wrap_expr
@@ -18,7 +17,7 @@ class ExprArrayNameSpace:
 
     _accessor = "arr"
 
-    def __init__(self, expr: Expr) -> None:
+    def __init__(self, expr: Expr):
         self._pyexpr = expr._pyexpr
 
     def min(self) -> Expr:
@@ -605,7 +604,7 @@ class ExprArrayNameSpace:
         │ 6   │
         └─────┘
         """
-        return wrap_expr(self._pyexpr.arr_explode())
+        return wrap_expr(self._pyexpr.explode())
 
     def contains(
         self, item: float | str | bool | int | date | datetime | time | IntoExprColumn

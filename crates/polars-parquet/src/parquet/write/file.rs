@@ -1,7 +1,7 @@
 use std::io::Write;
 
-use polars_parquet_format::thrift::protocol::TCompactOutputProtocol;
-use polars_parquet_format::RowGroup;
+use parquet_format_safe::thrift::protocol::TCompactOutputProtocol;
+use parquet_format_safe::RowGroup;
 
 use super::indexes::{write_column_index, write_offset_index};
 use super::page::PageWriteSpec;
@@ -39,7 +39,7 @@ pub(super) fn end_file<W: Write>(
     Ok(metadata_len as u64 + FOOTER_SIZE)
 }
 
-fn create_column_orders(schema_desc: &SchemaDescriptor) -> Vec<polars_parquet_format::ColumnOrder> {
+fn create_column_orders(schema_desc: &SchemaDescriptor) -> Vec<parquet_format_safe::ColumnOrder> {
     // We only include ColumnOrder for leaf nodes.
     // Currently only supported ColumnOrder is TypeDefinedOrder so we set this
     // for all leaf nodes.
@@ -47,9 +47,7 @@ fn create_column_orders(schema_desc: &SchemaDescriptor) -> Vec<polars_parquet_fo
     // is still technically the defined TYPEORDER so it should still be set.
     (0..schema_desc.columns().len())
         .map(|_| {
-            polars_parquet_format::ColumnOrder::TYPEORDER(
-                polars_parquet_format::TypeDefinedOrder {},
-            )
+            parquet_format_safe::ColumnOrder::TYPEORDER(parquet_format_safe::TypeDefinedOrder {})
         })
         .collect()
 }

@@ -45,13 +45,13 @@ enum MapStrategy {
 impl WindowExpr {
     fn map_list_agg_by_arg_sort(
         &self,
-        out_column: Column,
-        flattened: Column,
+        out_column: Series,
+        flattened: Series,
         mut ac: AggregationContext,
         gb: GroupBy,
         state: &ExecutionState,
         cache_key: &str,
-    ) -> PolarsResult<Column> {
+    ) -> PolarsResult<Series> {
         // idx (new-idx, original-idx)
         let mut idx_mapping = Vec::with_capacity(out_column.len());
 
@@ -124,14 +124,14 @@ impl WindowExpr {
     fn map_by_arg_sort(
         &self,
         df: &DataFrame,
-        out_column: Column,
-        flattened: Column,
+        out_column: Series,
+        flattened: Series,
         mut ac: AggregationContext,
-        group_by_columns: &[Column],
+        group_by_columns: &[Series],
         gb: GroupBy,
         state: &ExecutionState,
         cache_key: &str,
-    ) -> PolarsResult<Column> {
+    ) -> PolarsResult<Series> {
         // we use an arg_sort to map the values back
 
         // This is a bit more complicated because the final group tuples may differ from the original
@@ -315,6 +315,7 @@ impl WindowExpr {
     fn determine_map_strategy(
         &self,
         agg_state: &AggState,
+        sorted_keys: bool,
         gb: &GroupBy,
     ) -> PolarsResult<MapStrategy> {
         match (self.mapping, agg_state) {
@@ -333,8 +334,13 @@ impl WindowExpr {
             // no explicit aggregations, map over the groups
             //`(col("x").sum() * col("y")).over("groups")`
             (WindowMapping::GroupsToRows, AggState::AggregatedList(_)) => {
-                if let GroupsProxy::Slice { .. } = gb.get_groups() {
-                    // Result can be directly exploded if the input was sorted.
+                if sorted_keys {
+                    if let GroupsProxy::Idx(g) = gb.get_groups() {
+                        debug_assert!(g.is_sorted_flag())
+                    }
+                    // GroupsProxy::Slice is always sorted
+
+                    // Note that group columns must be sorted for this to make sense!!!
                     Ok(MapStrategy::Explode)
                 } else {
                     Ok(MapStrategy::Map)
@@ -371,7 +377,7 @@ impl PhysicalExpr for WindowExpr {
 
     // This first cached the group_by and the join tuples, but rayon under a mutex leads to deadlocks:
     // https://github.com/rayon-rs/rayon/issues/592
-    fn evaluate(&self, df: &DataFrame, state: &ExecutionState) -> PolarsResult<Column> {
+    fn evaluate(&self, df: &DataFrame, state: &ExecutionState) -> PolarsResult<Series> {
         // This method does the following:
         // 1. determine group_by tuples based on the group_column
         // 2. apply an aggregation function
@@ -400,13 +406,13 @@ impl PhysicalExpr for WindowExpr {
 
         if df.is_empty() {
             let field = self.phys_function.to_field(&df.schema())?;
-            return Ok(Column::full_null(field.name().clone(), 0, field.dtype()));
+            return Ok(Series::full_null(field.name().clone(), 0, field.dtype()));
         }
 
         let group_by_columns = self
             .group_by
             .iter()
-            .map(|e| e.evaluate(df, state).map(Column::from))
+            .map(|e| e.evaluate(df, state))
             .collect::<PolarsResult<Vec<_>>>()?;
 
         // if the keys are sorted
@@ -443,7 +449,7 @@ impl PhysicalExpr for WindowExpr {
             if let Some((order_by, options)) = &self.order_by {
                 let order_by = order_by.evaluate(df, state)?;
                 polars_ensure!(order_by.len() == df.height(), ShapeMismatch: "the order by expression evaluated to a length: {} that doesn't match the input DataFrame: {}", order_by.len(), df.height());
-                groups = update_groups_sort_by(&groups, order_by.as_materialized_series(), options)?
+                groups = update_groups_sort_by(&groups, &order_by, options)?
             }
 
             let out: PolarsResult<GroupsProxy> = Ok(groups);
@@ -510,7 +516,7 @@ impl PhysicalExpr for WindowExpr {
         let mut ac = self.run_aggregation(df, state, &gb)?;
 
         use MapStrategy::*;
-        match self.determine_map_strategy(ac.agg_state(), &gb)? {
+        match self.determine_map_strategy(ac.agg_state(), sorted_keys, &gb)? {
             Nothing => {
                 let mut out = ac.flat_naive().into_owned();
 
@@ -521,7 +527,7 @@ impl PhysicalExpr for WindowExpr {
                 if let Some(name) = &self.out_name {
                     out.rename(name.clone());
                 }
-                Ok(out.into_column())
+                Ok(out)
             },
             Explode => {
                 let mut out = ac.aggregated().explode()?;
@@ -529,7 +535,7 @@ impl PhysicalExpr for WindowExpr {
                 if let Some(name) = &self.out_name {
                     out.rename(name.clone());
                 }
-                Ok(out.into_column())
+                Ok(out)
             },
             Map => {
                 // TODO!
@@ -551,7 +557,6 @@ impl PhysicalExpr for WindowExpr {
                     state,
                     &cache_key,
                 )
-                .map(Column::from)
             },
             Join => {
                 let out_column = ac.aggregated();
@@ -567,7 +572,7 @@ impl PhysicalExpr for WindowExpr {
                     // we take the group locations to directly map them to the right place
                     (UpdateGroups::No, Some(out)) => {
                         cache_gb(gb, state, &cache_key);
-                        Ok(out.into_column())
+                        Ok(out)
                     },
                     (_, _) => {
                         let keys = gb.keys();
@@ -579,21 +584,13 @@ impl PhysicalExpr for WindowExpr {
                                 let right = &keys[0];
                                 PolarsResult::Ok(
                                     group_by_columns[0]
-                                        .as_materialized_series()
-                                        .hash_join_left(
-                                            right.as_materialized_series(),
-                                            JoinValidation::ManyToMany,
-                                            true,
-                                        )
+                                        .hash_join_left(right, JoinValidation::ManyToMany, true)
                                         .unwrap()
                                         .1,
                                 )
                             } else {
-                                let df_right =
-                                    unsafe { DataFrame::new_no_checks_height_from_first(keys) };
-                                let df_left = unsafe {
-                                    DataFrame::new_no_checks_height_from_first(group_by_columns)
-                                };
+                                let df_right = unsafe { DataFrame::new_no_checks(keys) };
+                                let df_left = unsafe { DataFrame::new_no_checks(group_by_columns) };
                                 Ok(private_left_join_multiple_keys(&df_left, &df_right, true)?.1)
                             }
                         };
@@ -626,7 +623,7 @@ impl PhysicalExpr for WindowExpr {
                             jt_map.insert(cache_key, join_opt_ids);
                         }
 
-                        Ok(out.into_column())
+                        Ok(out)
                     },
                 }
             },
@@ -656,7 +653,7 @@ impl PhysicalExpr for WindowExpr {
     }
 }
 
-fn materialize_column(join_opt_ids: &ChunkJoinOptIds, out_column: &Column) -> Column {
+fn materialize_column(join_opt_ids: &ChunkJoinOptIds, out_column: &Series) -> Series {
     {
         use arrow::Either;
         use polars_ops::chunked_array::TakeChunked;
@@ -680,11 +677,11 @@ fn cache_gb(gb: GroupBy, state: &ExecutionState, cache_key: &str) {
 
 /// Simple reducing aggregation can be set by the groups
 fn set_by_groups(
-    s: &Column,
+    s: &Series,
     groups: &GroupsProxy,
     len: usize,
     update_groups: bool,
-) -> Option<Column> {
+) -> Option<Series> {
     if update_groups {
         return None;
     }
@@ -697,9 +694,7 @@ fn set_by_groups(
                 Some(set_numeric($ca, groups, len))
             }};
         }
-        downcast_as_macro_arg_physical!(&s, dispatch)
-            .map(|s| s.cast(dtype).unwrap())
-            .map(Column::from)
+        downcast_as_macro_arg_physical!(&s, dispatch).map(|s| s.cast(dtype).unwrap())
     } else {
         None
     }
@@ -757,7 +752,7 @@ where
         unsafe { values.set_len(len) }
         ChunkedArray::new_vec(ca.name().clone(), values).into_series()
     } else {
-        // We don't use a mutable bitmap as bits will have race conditions!
+        // We don't use a mutable bitmap as bits will have have race conditions!
         // A single byte might alias if we write from single threads.
         let mut validity: Vec<bool> = vec![false; len];
         let validity_ptr = validity.as_mut_ptr();

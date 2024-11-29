@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterable
 
 from polars.io.database._utils import _run_async
 
 if TYPE_CHECKING:
     import sys
-    from collections.abc import Coroutine, Iterable
+    from collections.abc import Coroutine
 
     import pyarrow as pa
 

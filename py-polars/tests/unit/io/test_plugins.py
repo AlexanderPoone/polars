@@ -7,7 +7,7 @@ from polars.io.plugins import register_io_source
 from polars.testing import assert_frame_equal
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from typing import Iterator
 
 
 # A simple python source. But this can dispatch into a rust IO source as well.

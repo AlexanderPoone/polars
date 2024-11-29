@@ -100,31 +100,6 @@ impl StringNameSpace {
         )
     }
 
-    /// Uses aho-corasick to find many patterns.
-    /// # Arguments
-    /// - `patterns`: an expression that evaluates to a String column
-    /// - `ascii_case_insensitive`: Enable ASCII-aware case-insensitive matching.
-    ///   When this option is enabled, searching will be performed without respect to case for
-    ///   ASCII letters (a-z and A-Z) only.
-    /// - `overlapping`: Whether matches may overlap.
-    #[cfg(feature = "find_many")]
-    pub fn find_many(
-        self,
-        patterns: Expr,
-        ascii_case_insensitive: bool,
-        overlapping: bool,
-    ) -> Expr {
-        self.0.map_many_private(
-            FunctionExpr::StringExpr(StringFunction::FindMany {
-                ascii_case_insensitive,
-                overlapping,
-            }),
-            &[patterns],
-            false,
-            None,
-        )
-    }
-
     /// Check if a string value ends with the `sub` string.
     pub fn ends_with(self, sub: Expr) -> Expr {
         self.0.map_many_private(
@@ -613,16 +588,6 @@ impl StringNameSpace {
         self.0.map_many_private(
             FunctionExpr::StringExpr(StringFunction::JsonPathMatch),
             &[pat],
-            false,
-            None,
-        )
-    }
-
-    #[cfg(feature = "regex")]
-    pub fn escape_regex(self) -> Expr {
-        self.0.map_many_private(
-            FunctionExpr::StringExpr(StringFunction::EscapeRegex),
-            &[],
             false,
             None,
         )

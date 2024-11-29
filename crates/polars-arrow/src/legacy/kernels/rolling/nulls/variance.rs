@@ -9,8 +9,8 @@ pub(super) struct SumSquaredWindow<'a, T> {
     null_count: usize,
 }
 
-impl<T: NativeType + IsFloat + Add<Output = T> + Sub<Output = T> + Mul<Output = T>>
-    SumSquaredWindow<'_, T>
+impl<'a, T: NativeType + IsFloat + Add<Output = T> + Sub<Output = T> + Mul<Output = T>>
+    SumSquaredWindow<'a, T>
 {
     // compute sum from the entire window
     unsafe fn compute_sum_and_null_count(&mut self, start: usize, end: usize) -> Option<T> {
@@ -42,7 +42,7 @@ impl<'a, T: NativeType + IsFloat + Add<Output = T> + Sub<Output = T> + Mul<Outpu
         validity: &'a Bitmap,
         start: usize,
         end: usize,
-        _params: Option<RollingFnParams>,
+        _params: DynArgs,
     ) -> Self {
         let mut out = Self {
             slice,
@@ -153,17 +153,14 @@ impl<
         validity: &'a Bitmap,
         start: usize,
         end: usize,
-        params: Option<RollingFnParams>,
+        params: DynArgs,
     ) -> Self {
         Self {
             mean: MeanWindow::new(slice, validity, start, end, None),
             sum_of_squares: SumSquaredWindow::new(slice, validity, start, end, None),
             ddof: match params {
                 None => 1,
-                Some(pars) => match pars {
-                    RollingFnParams::Var(p) => p.ddof,
-                    _ => unreachable!("expected Var params"),
-                },
+                Some(pars) => pars.downcast_ref::<RollingVarParams>().unwrap().ddof,
             },
         }
     }
@@ -200,7 +197,7 @@ pub fn rolling_var<T>(
     min_periods: usize,
     center: bool,
     weights: Option<&[f64]>,
-    params: Option<RollingFnParams>,
+    params: DynArgs,
 ) -> ArrayRef
 where
     T: NativeType + std::iter::Sum<T> + Zero + AddAssign + SubAssign + IsFloat + Float,

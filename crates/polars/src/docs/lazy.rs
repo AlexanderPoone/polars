@@ -1,7 +1,7 @@
 //!
 //! # Polars Lazy cookbook
 //!
-//! This page should serve as a cookbook to quickly get you started with Polars' query engine.
+//! This page should serve a cookbook to quickly get you started with polars' query engine.
 //! The lazy API allows you to create complex well performing queries on top of Polars eager.
 //!
 //! ## Tree Of Contents
@@ -30,7 +30,7 @@
 //!
 //! // scan a csv file lazily
 //! let lf: LazyFrame = LazyCsvReader::new("some_path")
-//!     .with_has_header(true)
+//!     .has_header(true)
 //!     .finish()?;
 //!
 //! // scan a parquet file lazily
@@ -81,8 +81,11 @@
 //! ]?;
 //! // sort this DataFrame by multiple columns
 //!
+//! // ordering of the columns
+//! let descending = vec![true, false];
+//!
 //! let sorted = df.lazy()
-//!     .sort_by_exprs(vec![col("b"), col("a")], SortMultipleOptions::default())
+//!     .sort_by_exprs(vec![col("b"), col("a")], descending, false, false)
 //!     .collect()?;
 //!
 //! // sorted:
@@ -103,14 +106,14 @@
 //!
 //! ## Groupby
 //!
-//! This example is from the polars [user guide](https://docs.pola.rs/user-guide/concepts/expressions-and-contexts/#group_by-and-aggregations).
+//! This example is from the polars [user guide](https://docs.pola.rs/user-guide/concepts/contexts/#group_by-aggregation).
 //!
 //! ```
 //! use polars::prelude::*;
 //! # fn example() -> PolarsResult<()> {
 //!
 //!  let df = LazyCsvReader::new("reddit.csv")
-//!     .with_has_header(true)
+//!     .has_header(true)
 //!     .with_separator(b',')
 //!     .finish()?
 //!     .group_by([col("comment_karma")])
@@ -257,7 +260,7 @@
 //!         "b" => [3.0f32, 5.1, 0.3]
 //!     ]?
 //!     .lazy()
-//!     .select([as_struct(vec![col("a"), col("b")]).map(
+//!     .select([as_struct(&[col("a"), col("b")]).map(
 //!         |s| {
 //!             let ca = s.struct_()?;
 //!

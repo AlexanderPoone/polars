@@ -22,23 +22,23 @@ fn cum_fold_dtype() -> GetOutput {
 /// Accumulate over multiple columns horizontally / row wise.
 pub fn fold_exprs<F, E>(acc: Expr, f: F, exprs: E) -> Expr
 where
-    F: 'static + Fn(Column, Column) -> PolarsResult<Option<Column>> + Send + Sync,
+    F: 'static + Fn(Series, Series) -> PolarsResult<Option<Series>> + Send + Sync + Clone,
     E: AsRef<[Expr]>,
 {
     let mut exprs = exprs.as_ref().to_vec();
     exprs.push(acc);
 
-    let function = new_column_udf(move |columns: &mut [Column]| {
-        let mut columns = columns.to_vec();
-        let mut acc = columns.pop().unwrap();
+    let function = SpecialEq::new(Arc::new(move |series: &mut [Series]| {
+        let mut series = series.to_vec();
+        let mut acc = series.pop().unwrap();
 
-        for c in columns {
-            if let Some(a) = f(acc.clone(), c)? {
+        for s in series {
+            if let Some(a) = f(acc.clone(), s)? {
                 acc = a
             }
         }
         Ok(Some(acc))
-    });
+    }) as Arc<dyn SeriesUdf>);
 
     Expr::AnonymousFunction {
         input: exprs,
@@ -62,20 +62,20 @@ where
 /// `collect` is called.
 pub fn reduce_exprs<F, E>(f: F, exprs: E) -> Expr
 where
-    F: 'static + Fn(Column, Column) -> PolarsResult<Option<Column>> + Send + Sync,
+    F: 'static + Fn(Series, Series) -> PolarsResult<Option<Series>> + Send + Sync + Clone,
     E: AsRef<[Expr]>,
 {
     let exprs = exprs.as_ref().to_vec();
 
-    let function = new_column_udf(move |columns: &mut [Column]| {
-        let mut c_iter = columns.iter();
+    let function = SpecialEq::new(Arc::new(move |series: &mut [Series]| {
+        let mut s_iter = series.iter();
 
-        match c_iter.next() {
+        match s_iter.next() {
             Some(acc) => {
                 let mut acc = acc.clone();
 
-                for c in c_iter {
-                    if let Some(a) = f(acc.clone(), c.clone())? {
+                for s in s_iter {
+                    if let Some(a) = f(acc.clone(), s.clone())? {
                         acc = a
                     }
                 }
@@ -83,7 +83,7 @@ where
             },
             None => Err(polars_err!(ComputeError: "`reduce` did not have any expressions to fold")),
         }
-    });
+    }) as Arc<dyn SeriesUdf>);
 
     Expr::AnonymousFunction {
         input: exprs,
@@ -104,34 +104,34 @@ where
 #[cfg(feature = "dtype-struct")]
 pub fn cum_reduce_exprs<F, E>(f: F, exprs: E) -> Expr
 where
-    F: 'static + Fn(Column, Column) -> PolarsResult<Option<Column>> + Send + Sync,
+    F: 'static + Fn(Series, Series) -> PolarsResult<Option<Series>> + Send + Sync + Clone,
     E: AsRef<[Expr]>,
 {
     let exprs = exprs.as_ref().to_vec();
 
-    let function = new_column_udf(move |columns: &mut [Column]| {
-        let mut c_iter = columns.iter();
+    let function = SpecialEq::new(Arc::new(move |series: &mut [Series]| {
+        let mut s_iter = series.iter();
 
-        match c_iter.next() {
+        match s_iter.next() {
             Some(acc) => {
                 let mut acc = acc.clone();
                 let mut result = vec![acc.clone()];
 
-                for c in c_iter {
-                    let name = c.name().clone();
-                    if let Some(a) = f(acc.clone(), c.clone())? {
+                for s in s_iter {
+                    let name = s.name().clone();
+                    if let Some(a) = f(acc.clone(), s.clone())? {
                         acc = a;
                     }
                     acc.rename(name);
                     result.push(acc.clone());
                 }
 
-                StructChunked::from_columns(acc.name().clone(), result[0].len(), &result)
-                    .map(|ca| Some(ca.into_column()))
+                StructChunked::from_series(acc.name().clone(), &result)
+                    .map(|ca| Some(ca.into_series()))
             },
             None => Err(polars_err!(ComputeError: "`reduce` did not have any expressions to fold")),
         }
-    });
+    }) as Arc<dyn SeriesUdf>);
 
     Expr::AnonymousFunction {
         input: exprs,
@@ -152,33 +152,32 @@ where
 #[cfg(feature = "dtype-struct")]
 pub fn cum_fold_exprs<F, E>(acc: Expr, f: F, exprs: E, include_init: bool) -> Expr
 where
-    F: 'static + Fn(Column, Column) -> PolarsResult<Option<Column>> + Send + Sync,
+    F: 'static + Fn(Series, Series) -> PolarsResult<Option<Series>> + Send + Sync + Clone,
     E: AsRef<[Expr]>,
 {
     let mut exprs = exprs.as_ref().to_vec();
     exprs.push(acc);
 
-    let function = new_column_udf(move |columns: &mut [Column]| {
-        let mut columns = columns.to_vec();
-        let mut acc = columns.pop().unwrap();
+    let function = SpecialEq::new(Arc::new(move |series: &mut [Series]| {
+        let mut series = series.to_vec();
+        let mut acc = series.pop().unwrap();
 
         let mut result = vec![];
         if include_init {
             result.push(acc.clone())
         }
 
-        for c in columns {
-            let name = c.name().clone();
-            if let Some(a) = f(acc.clone(), c)? {
+        for s in series {
+            let name = s.name().clone();
+            if let Some(a) = f(acc.clone(), s)? {
                 acc = a;
                 acc.rename(name);
                 result.push(acc.clone());
             }
         }
 
-        StructChunked::from_columns(acc.name().clone(), result[0].len(), &result)
-            .map(|ca| Some(ca.into_column()))
-    });
+        StructChunked::from_series(acc.name().clone(), &result).map(|ca| Some(ca.into_series()))
+    }) as Arc<dyn SeriesUdf>);
 
     Expr::AnonymousFunction {
         input: exprs,

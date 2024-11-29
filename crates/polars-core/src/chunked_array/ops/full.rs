@@ -101,7 +101,8 @@ impl ChunkFullNull for BinaryOffsetChunked {
 
 impl ChunkFull<&Series> for ListChunked {
     fn full(name: PlSmallStr, value: &Series, length: usize) -> ListChunked {
-        let mut builder = get_list_builder(value.dtype(), value.len() * length, length, name);
+        let mut builder =
+            get_list_builder(value.dtype(), value.len() * length, length, name).unwrap();
         for _ in 0..length {
             builder.append_series(value).unwrap();
         }
@@ -127,21 +128,14 @@ impl ArrayChunked {
             ArrowDataType::FixedSizeList(
                 Box::new(ArrowField::new(
                     PlSmallStr::from_static("item"),
-                    inner_dtype.to_physical().to_arrow(CompatLevel::newest()),
+                    inner_dtype.to_arrow(CompatLevel::newest()),
                     true,
                 )),
                 width,
             ),
             length,
         );
-        // SAFETY: physical type matches the logical.
-        unsafe {
-            ChunkedArray::from_chunks_and_dtype(
-                name,
-                vec![Box::new(arr)],
-                DataType::Array(Box::new(inner_dtype.clone()), width),
-            )
-        }
+        ChunkedArray::with_chunk(name, arr)
     }
 }
 
@@ -153,22 +147,14 @@ impl ChunkFull<&Series> for ArrayChunked {
         let arrow_dtype = ArrowDataType::FixedSizeList(
             Box::new(ArrowField::new(
                 PlSmallStr::from_static("item"),
-                dtype.to_physical().to_arrow(CompatLevel::newest()),
+                dtype.to_arrow(CompatLevel::newest()),
                 true,
             )),
             width,
         );
         let value = value.rechunk().chunks()[0].clone();
         let arr = FixedSizeListArray::full(length, value, arrow_dtype);
-
-        // SAFETY: physical type matches the logical.
-        unsafe {
-            ChunkedArray::from_chunks_and_dtype(
-                name,
-                vec![Box::new(arr)],
-                DataType::Array(Box::new(dtype.clone()), width),
-            )
-        }
+        ChunkedArray::with_chunk(name, arr)
     }
 }
 
@@ -206,7 +192,8 @@ impl ListChunked {
 #[cfg(feature = "dtype-struct")]
 impl ChunkFullNull for StructChunked {
     fn full_null(name: PlSmallStr, length: usize) -> StructChunked {
-        StructChunked::from_series(name, length, [].iter())
+        let s = vec![Series::new_null(PlSmallStr::EMPTY, length)];
+        StructChunked::from_series(name, &s)
             .unwrap()
             .with_outer_validity(Some(Bitmap::new_zeroed(length)))
     }

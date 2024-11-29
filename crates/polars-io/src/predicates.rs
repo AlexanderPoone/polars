@@ -8,7 +8,6 @@ pub trait PhysicalIoExpr: Send + Sync {
     fn evaluate_io(&self, df: &DataFrame) -> PolarsResult<Series>;
 
     /// Get the variables that are used in the expression i.e. live variables.
-    /// This can contain duplicates.
     fn live_variables(&self) -> Option<Vec<PlSmallStr>>;
 
     /// Can take &dyn Statistics and determine of a file should be
@@ -159,7 +158,6 @@ impl ColumnStats {
     ///
     /// Returns `None` if no maximum value is available.
     pub fn to_min(&self) -> Option<&Series> {
-        // @scalar-opt
         let min_val = self.min_value.as_ref()?;
         let dtype = min_val.dtype();
 
@@ -178,7 +176,6 @@ impl ColumnStats {
     ///
     /// Returns `None` if no maximum value is available.
     pub fn to_max(&self) -> Option<&Series> {
-        // @scalar-opt
         let max_val = self.max_value.as_ref()?;
         let dtype = max_val.dtype();
 

@@ -34,11 +34,11 @@ use hashbrown::hash_map::{Entry, RawEntryMut};
 pub use iejoin::{IEJoinOptions, InequalityOperator};
 #[cfg(feature = "merge_sorted")]
 pub use merge_sorted::_merge_sorted_dfs;
+use polars_core::hashing::_HASHMAP_INIT_SIZE;
 #[allow(unused_imports)]
-use polars_core::chunked_array::ops::row_encode::{
+use polars_core::prelude::sort::arg_sort_multiple::{
     encode_rows_vertical_par_unordered, encode_rows_vertical_par_unordered_broadcast_nulls,
 };
-use polars_core::hashing::_HASHMAP_INIT_SIZE;
 use polars_core::prelude::*;
 pub(super) use polars_core::series::IsSorted;
 use polars_core::utils::slice_offsets;
@@ -93,18 +93,8 @@ pub trait DataFrameJoinOps: IntoDf {
         args: JoinArgs,
     ) -> PolarsResult<DataFrame> {
         let df_left = self.to_df();
-        let selected_left = df_left.select_columns(left_on)?;
-        let selected_right = other.select_columns(right_on)?;
-
-        let selected_left = selected_left
-            .into_iter()
-            .map(Column::take_materialized_series)
-            .collect::<Vec<_>>();
-        let selected_right = selected_right
-            .into_iter()
-            .map(Column::take_materialized_series)
-            .collect::<Vec<_>>();
-
+        let selected_left = df_left.select_series(left_on)?;
+        let selected_right = other.select_series(right_on)?;
         self._join_impl(other, selected_left, selected_right, args, true, false)
     }
 
@@ -506,14 +496,7 @@ trait DataFrameJoinOpsPrivate: IntoDf {
 
         let (df_left, df_right) = POOL.join(
             // SAFETY: join indices are known to be in bounds
-            || unsafe {
-                left_df._create_left_df_from_slice(
-                    join_tuples_left,
-                    false,
-                    args.slice.is_some(),
-                    sorted,
-                )
-            },
+            || unsafe { left_df._create_left_df_from_slice(join_tuples_left, false, sorted) },
             || unsafe {
                 if let Some(drop_names) = drop_names {
                     other.drop_many(drop_names)
@@ -554,19 +537,7 @@ pub fn private_left_join_multiple_keys(
     b: &DataFrame,
     join_nulls: bool,
 ) -> PolarsResult<LeftJoinIds> {
-    // @scalar-opt
-    let a_cols = a
-        .get_columns()
-        .iter()
-        .map(|c| c.as_materialized_series().clone())
-        .collect::<Vec<_>>();
-    let b_cols = b
-        .get_columns()
-        .iter()
-        .map(|c| c.as_materialized_series().clone())
-        .collect::<Vec<_>>();
-
-    let a = prepare_keys_multiple(&a_cols, join_nulls)?.into_series();
-    let b = prepare_keys_multiple(&b_cols, join_nulls)?.into_series();
+    let a = prepare_keys_multiple(a.get_columns(), join_nulls)?.into_series();
+    let b = prepare_keys_multiple(b.get_columns(), join_nulls)?.into_series();
     sort_or_hash_left(&a, &b, false, JoinValidation::ManyToMany, join_nulls)
 }

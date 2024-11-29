@@ -11,6 +11,8 @@ use crate::datatypes::ArrowDataType;
 use crate::offset::{Offset, Offsets, OffsetsBuffer};
 use crate::trusted_len::TrustedLen;
 
+#[cfg(feature = "arrow_rs")]
+mod data;
 mod ffi;
 pub(super) mod fmt;
 mod from;

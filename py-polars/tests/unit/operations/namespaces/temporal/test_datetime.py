@@ -125,19 +125,26 @@ def test_dt_datetime_deprecated() -> None:
     assert result.item() == expected
 
 
-@pytest.mark.parametrize("time_zone", [None, "Asia/Kathmandu", "UTC"])
-def test_local_date_sortedness(time_zone: str | None) -> None:
-    # singleton
+@pytest.mark.parametrize(
+    ("time_zone", "expected"),
+    [
+        (None, True),
+        ("Asia/Kathmandu", False),
+        ("UTC", True),
+    ],
+)
+def test_local_date_sortedness(time_zone: str | None, expected: bool) -> None:
+    # singleton - always sorted
     ser = (pl.Series([datetime(2022, 1, 1, 23)]).dt.replace_time_zone(time_zone)).sort()
     result = ser.dt.date()
     assert result.flags["SORTED_ASC"]
 
-    # 2 elements
+    # 2 elements - depends on time zone
     ser = (
         pl.Series([datetime(2022, 1, 1, 23)] * 2).dt.replace_time_zone(time_zone)
     ).sort()
     result = ser.dt.date()
-    assert result.flags["SORTED_ASC"]
+    assert result.flags["SORTED_ASC"] >= expected
 
 
 @pytest.mark.parametrize("time_zone", [None, "Asia/Kathmandu", "UTC"])
@@ -178,9 +185,9 @@ def test_local_time_before_epoch(time_unit: TimeUnit) -> None:
         (None, "1d", True),
         ("Europe/London", "1d", False),
         ("UTC", "1d", True),
-        (None, "1m", True),
-        ("Europe/London", "1m", True),
-        ("UTC", "1m", True),
+        (None, "1mo", True),
+        ("Europe/London", "1mo", False),
+        ("UTC", "1mo", True),
         (None, "1w", True),
         ("Europe/London", "1w", False),
         ("UTC", "1w", True),
@@ -1367,7 +1374,7 @@ def test_dt_mean_deprecated() -> None:
 @pytest.mark.parametrize(
     "value",
     [
-        # date(1677, 9, 22), # See test_literal_from_datetime.
+        date(1677, 9, 22),
         date(1970, 1, 1),
         date(2024, 2, 29),
         date(2262, 4, 11),
@@ -1400,13 +1407,8 @@ def test_literal_from_date(
 @pytest.mark.parametrize(
     "value",
     [
-        # Very old dates with a timezone like EST caused problems for the CI due
-        # to the IANA timezone database updating their historical offset, so
-        # these have been disabled for now. A mismatch between the timezone
-        # database that chrono_tz crate uses vs. the one that Python uses (which
-        # differs from platform to platform) will cause this to fail.
-        # datetime(1677, 9, 22),
-        # datetime(1677, 9, 22, tzinfo=ZoneInfo("EST")),
+        datetime(1677, 9, 22),
+        datetime(1677, 9, 22, tzinfo=ZoneInfo("EST")),
         datetime(1970, 1, 1),
         datetime(1970, 1, 1, tzinfo=ZoneInfo("EST")),
         datetime(2024, 2, 29),

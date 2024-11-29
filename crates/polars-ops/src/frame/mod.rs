@@ -11,6 +11,9 @@ use polars_core::utils::accumulate_dataframes_horizontal;
 #[cfg(feature = "to_dummies")]
 use polars_core::POOL;
 
+#[allow(unused_imports)]
+use crate::prelude::*;
+
 pub trait IntoDf {
     fn to_df(&self) -> &DataFrame;
 }
@@ -24,7 +27,7 @@ impl IntoDf for DataFrame {
 impl<T: IntoDf> DataFrameOps for T {}
 
 pub trait DataFrameOps: IntoDf {
-    /// Create dummy variables.
+    /// Crea dummy variables.
     ///
     /// # Example
     ///
@@ -91,8 +94,6 @@ pub trait DataFrameOps: IntoDf {
         separator: Option<&str>,
         drop_first: bool,
     ) -> PolarsResult<DataFrame> {
-        use crate::series::ToDummies;
-
         let df = self.to_df();
 
         let set: PlHashSet<&str> = if let Some(columns) = columns {
@@ -105,7 +106,7 @@ pub trait DataFrameOps: IntoDf {
             df.get_columns()
                 .par_iter()
                 .map(|s| match set.contains(s.name().as_str()) {
-                    true => s.as_materialized_series().to_dummies(separator, drop_first),
+                    true => s.to_dummies(separator, drop_first),
                     false => Ok(s.clone().into_frame()),
                 })
                 .collect::<PolarsResult<Vec<_>>>()

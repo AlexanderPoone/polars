@@ -3,25 +3,35 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 #[cfg(feature = "serde")]
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
+#[cfg(feature = "serde")]
+use serde::{Deserializer, Serializer};
 
 use super::*;
 
 /// A wrapper trait for any closure `Fn(Vec<Series>) -> PolarsResult<Series>`
-pub trait ColumnsUdf: Send + Sync {
+pub trait SeriesUdf: Send + Sync {
     fn as_any(&self) -> &dyn std::any::Any {
         unimplemented!("as_any not implemented for this 'opaque' function")
     }
 
-    fn call_udf(&self, s: &mut [Column]) -> PolarsResult<Option<Column>>;
+    fn call_udf(&self, s: &mut [Series]) -> PolarsResult<Option<Series>>;
 
     fn try_serialize(&self, _buf: &mut Vec<u8>) -> PolarsResult<()> {
         polars_bail!(ComputeError: "serialization not supported for this 'opaque' function")
     }
+
+    // Needed for python functions. After they are deserialized we first check if they
+    // have a function that generates an output
+    // This will be slower during optimization, so it is up to us to move
+    // all expression to the known function architecture.
+    fn get_output(&self) -> Option<GetOutput> {
+        None
+    }
 }
 
 #[cfg(feature = "serde")]
-impl Serialize for SpecialEq<Arc<dyn ColumnsUdf>> {
+impl Serialize for SpecialEq<Arc<dyn SeriesUdf>> {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -36,32 +46,7 @@ impl Serialize for SpecialEq<Arc<dyn ColumnsUdf>> {
 }
 
 #[cfg(feature = "serde")]
-impl<T: Serialize + Clone> Serialize for LazySerde<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Self::Deserialized(t) => t.serialize(serializer),
-            Self::Bytes(b) => serializer.serialize_bytes(b),
-        }
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'a, T: Deserialize<'a> + Clone> Deserialize<'a> for LazySerde<T> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'a>,
-    {
-        let buf = Vec::<u8>::deserialize(deserializer)?;
-        Ok(Self::Bytes(bytes::Bytes::from(buf)))
-    }
-}
-
-#[cfg(feature = "serde")]
-// impl<T: Deserialize> Deserialize for crate::dsl::expr::LazySerde<T> {
-impl<'a> Deserialize<'a> for SpecialEq<Arc<dyn ColumnsUdf>> {
+impl<'a> Deserialize<'a> for SpecialEq<Arc<dyn SeriesUdf>> {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'a>,
@@ -71,7 +56,7 @@ impl<'a> Deserialize<'a> for SpecialEq<Arc<dyn ColumnsUdf>> {
         {
             let buf = Vec::<u8>::deserialize(deserializer)?;
 
-            if buf.starts_with(python_udf::PYTHON_SERDE_MAGIC_BYTE_MARK) {
+            if buf.starts_with(python_udf::MAGIC_BYTE_MARK) {
                 let udf = python_udf::PythonUdfExpression::try_deserialize(&buf)
                     .map_err(|e| D::Error::custom(format!("{e}")))?;
                 Ok(SpecialEq::new(udf))
@@ -83,8 +68,6 @@ impl<'a> Deserialize<'a> for SpecialEq<Arc<dyn ColumnsUdf>> {
         }
         #[cfg(not(feature = "python"))]
         {
-            _ = deserializer;
-
             Err(D::Error::custom(
                 "deserialization not supported for this 'opaque' function",
             ))
@@ -92,42 +75,42 @@ impl<'a> Deserialize<'a> for SpecialEq<Arc<dyn ColumnsUdf>> {
     }
 }
 
-impl<F> ColumnsUdf for F
+impl<F> SeriesUdf for F
 where
-    F: Fn(&mut [Column]) -> PolarsResult<Option<Column>> + Send + Sync,
+    F: Fn(&mut [Series]) -> PolarsResult<Option<Series>> + Send + Sync,
 {
-    fn call_udf(&self, s: &mut [Column]) -> PolarsResult<Option<Column>> {
+    fn call_udf(&self, s: &mut [Series]) -> PolarsResult<Option<Series>> {
         self(s)
     }
 }
 
-impl Debug for dyn ColumnsUdf {
+impl Debug for dyn SeriesUdf {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ColumnUdf")
+        write!(f, "SeriesUdf")
     }
 }
 
-/// A wrapper trait for any binary closure `Fn(Column, Column) -> PolarsResult<Column>`
-pub trait ColumnBinaryUdf: Send + Sync {
-    fn call_udf(&self, a: Column, b: Column) -> PolarsResult<Column>;
+/// A wrapper trait for any binary closure `Fn(Series, Series) -> PolarsResult<Series>`
+pub trait SeriesBinaryUdf: Send + Sync {
+    fn call_udf(&self, a: Series, b: Series) -> PolarsResult<Series>;
 }
 
-impl<F> ColumnBinaryUdf for F
+impl<F> SeriesBinaryUdf for F
 where
-    F: Fn(Column, Column) -> PolarsResult<Column> + Send + Sync,
+    F: Fn(Series, Series) -> PolarsResult<Series> + Send + Sync,
 {
-    fn call_udf(&self, a: Column, b: Column) -> PolarsResult<Column> {
+    fn call_udf(&self, a: Series, b: Series) -> PolarsResult<Series> {
         self(a, b)
     }
 }
 
-impl Debug for dyn ColumnBinaryUdf {
+impl Debug for dyn SeriesBinaryUdf {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ColumnBinaryUdf")
+        write!(f, "SeriesBinaryUdf")
     }
 }
 
-impl Default for SpecialEq<Arc<dyn ColumnBinaryUdf>> {
+impl Default for SpecialEq<Arc<dyn SeriesBinaryUdf>> {
     fn default() -> Self {
         panic!("implementation error");
     }
@@ -399,7 +382,7 @@ impl<'a> Deserialize<'a> for GetOutput {
         {
             let buf = Vec::<u8>::deserialize(deserializer)?;
 
-            if buf.starts_with(python_udf::PYTHON_SERDE_MAGIC_BYTE_MARK) {
+            if buf.starts_with(python_udf::MAGIC_BYTE_MARK) {
                 let get_output = python_udf::PythonGetOutput::try_deserialize(&buf)
                     .map_err(|e| D::Error::custom(format!("{e}")))?;
                 Ok(SpecialEq::new(get_output))
@@ -411,8 +394,6 @@ impl<'a> Deserialize<'a> for GetOutput {
         }
         #[cfg(not(feature = "python"))]
         {
-            _ = deserializer;
-
             Err(D::Error::custom(
                 "deserialization not supported for this output field",
             ))

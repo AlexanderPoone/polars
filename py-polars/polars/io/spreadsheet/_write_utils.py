@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, Iterable, Sequence, overload
 
 from polars import functions as F
 from polars.datatypes import (
@@ -22,7 +21,6 @@ from polars.exceptions import DuplicateError
 from polars.selectors import _expand_selector_dicts, _expand_selectors, numeric
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
     from typing import Literal
 
     from xlsxwriter import Workbook
@@ -57,7 +55,7 @@ _XL_DEFAULT_DTYPE_FORMATS_: dict[PolarsDataType, str] = {
 class _XLFormatCache:
     """Create/cache only one Format object per distinct set of format options."""
 
-    def __init__(self, wb: Workbook) -> None:
+    def __init__(self, wb: Workbook):
         self._cache: dict[str, Format] = {}
         self.wb = wb
 
@@ -414,10 +412,10 @@ def _xl_setup_table_columns(
 
     # expand/normalise column totals
     if column_totals is True:
-        column_totals = {numeric(): "sum", **dict.fromkeys(row_totals or (), "sum")}
+        column_totals = {numeric(): "sum", **{t: "sum" for t in row_totals or ()}}
     elif isinstance(column_totals, str):
         fn = column_totals.lower()
-        column_totals = {numeric(): fn, **dict.fromkeys(row_totals or (), fn)}
+        column_totals = {numeric(): fn, **{t: fn for t in row_totals or ()}}
 
     column_totals = _unpack_multi_column_dict(  # type: ignore[assignment]
         _expand_selector_dicts(df, column_totals, expand_keys=True, expand_values=False)
@@ -425,7 +423,7 @@ def _xl_setup_table_columns(
         else _expand_selectors(df, column_totals)
     )
     column_total_funcs = (
-        dict.fromkeys(column_totals, "sum")
+        {col: "sum" for col in column_totals}
         if isinstance(column_totals, Sequence)
         else (column_totals.copy() if isinstance(column_totals, dict) else {})
     )

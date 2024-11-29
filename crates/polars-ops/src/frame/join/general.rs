@@ -1,7 +1,7 @@
 use polars_utils::format_pl_smallstr;
 
 use super::*;
-use crate::series::coalesce_columns;
+use crate::series::coalesce_series;
 
 pub fn _join_suffix_name(name: &str, suffix: &str) -> PlSmallStr {
     format_pl_smallstr!("{name}{suffix}")
@@ -56,7 +56,7 @@ pub fn _coalesce_full_join(
     df_left: &DataFrame,
 ) -> DataFrame {
     // No need to allocate the schema because we already
-    // know for certain that the column name for left is `name`
+    // know for certain that the column name for left left is `name`
     // and for right is `name + suffix`
     let schema_left = if keys_left == keys_right {
         Schema::default()
@@ -83,7 +83,7 @@ pub fn _coalesce_full_join(
         let l = columns[pos_l].clone();
         let r = columns[pos_r].clone();
 
-        columns[pos_l] = coalesce_columns(&[l, r]).unwrap();
+        columns[pos_l] = coalesce_series(&[l, r]).unwrap();
         to_remove.push(pos_r);
     }
     // sort in reverse order, so the indexes remain correct if we remove.

@@ -44,12 +44,12 @@ fn offsets_to_groups(offsets: &[i64]) -> Option<GroupsProxy> {
 }
 
 fn run_per_sublist(
-    s: Column,
+    s: Series,
     lst: &ListChunked,
     expr: &Expr,
     parallel: bool,
     output_field: Field,
-) -> PolarsResult<Option<Column>> {
+) -> PolarsResult<Option<Series>> {
     let phys_expr = prepare_expression_for_context(
         PlSmallStr::EMPTY,
         expr,
@@ -69,7 +69,7 @@ fn run_per_sublist(
                     let df = s.into_frame();
                     let out = phys_expr.evaluate(&df, &state);
                     match out {
-                        Ok(s) => Some(s.take_materialized_series()),
+                        Ok(s) => Some(s),
                         Err(e) => {
                             *m_err.lock().unwrap() = Some(e);
                             None
@@ -86,11 +86,11 @@ fn run_per_sublist(
         lst.into_iter()
             .map(|s| {
                 s.and_then(|s| unsafe {
-                    df_container.with_column_unchecked(s.into_column());
+                    df_container.get_columns_mut().push(s);
                     let out = phys_expr.evaluate(&df_container, &state);
-                    df_container.clear_columns();
+                    df_container.get_columns_mut().clear();
                     match out {
-                        Ok(s) => Some(s.take_materialized_series()),
+                        Ok(s) => Some(s),
                         Err(e) => {
                             err = Some(e);
                             None
@@ -107,9 +107,9 @@ fn run_per_sublist(
     ca.rename(s.name().clone());
 
     if ca.dtype() != output_field.dtype() {
-        ca.cast(output_field.dtype()).map(Column::from).map(Some)
+        ca.cast(output_field.dtype()).map(Some)
     } else {
-        Ok(Some(ca.into_column()))
+        Ok(Some(ca.into_series()))
     }
 }
 
@@ -117,7 +117,7 @@ fn run_on_group_by_engine(
     name: PlSmallStr,
     lst: &ListChunked,
     expr: &Expr,
-) -> PolarsResult<Option<Column>> {
+) -> PolarsResult<Option<Series>> {
     let lst = lst.rechunk();
     let arr = lst.downcast_iter().next().unwrap();
     let groups = offsets_to_groups(arr.offsets()).unwrap();
@@ -138,11 +138,11 @@ fn run_on_group_by_engine(
     let out = match ac.agg_state() {
         AggState::AggregatedScalar(_) => {
             let out = ac.aggregated();
-            out.as_list().into_column()
+            out.as_list().into_series()
         },
         _ => ac.aggregated(),
     };
-    Ok(Some(out.with_name(name).into_column()))
+    Ok(Some(out.with_name(name)))
 }
 
 pub trait ListNameSpaceExtension: IntoListNameSpace + Sized {
@@ -151,7 +151,7 @@ pub trait ListNameSpaceExtension: IntoListNameSpace + Sized {
         let this = self.into_list_name_space();
 
         let expr2 = expr.clone();
-        let func = move |c: Column| {
+        let func = move |s: Series| {
             for e in expr.into_iter() {
                 match e {
                     #[cfg(feature = "dtype-categorical")]
@@ -173,19 +173,19 @@ pub trait ListNameSpaceExtension: IntoListNameSpace + Sized {
                     _ => {},
                 }
             }
-            let lst = c.list()?.clone();
+            let lst = s.list()?.clone();
 
             // # fast returns
             // ensure we get the new schema
             let output_field = eval_field_to_dtype(lst.ref_field(), &expr, true);
             if lst.is_empty() {
-                return Ok(Some(Column::new_empty(
-                    c.name().clone(),
+                return Ok(Some(Series::new_empty(
+                    s.name().clone(),
                     output_field.dtype(),
                 )));
             }
             if lst.null_count() == lst.len() {
-                return Ok(Some(c.cast(output_field.dtype())?.into_column()));
+                return Ok(Some(s.cast(output_field.dtype())?));
             }
 
             let fits_idx_size = lst.get_values_size() <= (IdxSize::MAX as usize);
@@ -195,10 +195,10 @@ pub trait ListNameSpaceExtension: IntoListNameSpace + Sized {
                 expr.into_iter().any(|e| matches!(e, Expr::AnonymousFunction { options, .. } if options.fmt_str == MAP_LIST_NAME))
             };
 
-            if fits_idx_size && c.null_count() == 0 && !is_user_apply() {
-                run_on_group_by_engine(c.name().clone(), &lst, &expr)
+            if fits_idx_size && s.null_count() == 0 && !is_user_apply() {
+                run_on_group_by_engine(s.name().clone(), &lst, &expr)
             } else {
-                run_per_sublist(c, &lst, &expr, parallel, output_field)
+                run_per_sublist(s, &lst, &expr, parallel, output_field)
             }
         };
 

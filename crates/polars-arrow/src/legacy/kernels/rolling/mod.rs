@@ -3,13 +3,13 @@ pub mod nulls;
 pub mod quantile_filter;
 mod window;
 
+use std::any::Any;
 use std::ops::{Add, AddAssign, Div, Mul, Sub, SubAssign};
+use std::sync::Arc;
 
 use num_traits::{Bounded, Float, NumCast, One, Zero};
 use polars_utils::float::IsFloat;
 use polars_utils::ord::{compare_fn_nan_max, compare_fn_nan_min};
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
 use window::*;
 
 use crate::array::{ArrayRef, PrimitiveArray};
@@ -23,13 +23,7 @@ type End = usize;
 type Idx = usize;
 type WindowSize = usize;
 type Len = usize;
-
-#[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub enum RollingFnParams {
-    Quantile(RollingQuantileParams),
-    Var(RollingVarParams),
-}
+pub type DynArgs = Option<Arc<dyn Any + Sync + Send>>;
 
 fn det_offsets(i: Idx, window_size: WindowSize, _len: Len) -> (usize, usize) {
     (i.saturating_sub(window_size - 1), i + 1)
@@ -83,15 +77,13 @@ where
 }
 
 // Parameters allowed for rolling operations.
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Copy, Debug)]
 pub struct RollingVarParams {
     pub ddof: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Copy, Debug)]
 pub struct RollingQuantileParams {
     pub prob: f64,
-    pub method: QuantileMethod,
+    pub interpol: QuantileInterpolOptions,
 }

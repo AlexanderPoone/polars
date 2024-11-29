@@ -15,15 +15,15 @@ impl DataFrame {
         let new_height = self.width();
         // Allocate space for the transposed columns, putting the "row names" first if needed
         let mut cols_t = match keep_names_as {
-            None => Vec::<Column>::with_capacity(new_width),
+            None => Vec::<Series>::with_capacity(new_width),
             Some(name) => {
-                let mut tmp = Vec::<Column>::with_capacity(new_width + 1);
+                let mut tmp = Vec::<Series>::with_capacity(new_width + 1);
                 tmp.push(
                     StringChunked::from_iter_values(
                         name,
                         self.get_column_names_owned().into_iter(),
                     )
-                    .into_column(),
+                    .into(),
                 );
                 tmp
             },
@@ -60,7 +60,8 @@ impl DataFrame {
                     .collect::<Vec<_>>();
 
                 let columns = self
-                    .materialized_column_iter()
+                    .columns
+                    .iter()
                     // first cast to supertype before casting to physical to ensure units are correct
                     .map(|s| s.cast(dtype).unwrap().cast(&phys_dtype).unwrap())
                     .collect::<Vec<_>>();
@@ -80,11 +81,11 @@ impl DataFrame {
                     // SAFETY: we are casting back to the supertype
                     let mut s = unsafe { buf.into_series().cast_unchecked(dtype).unwrap() };
                     s.rename(name.clone());
-                    s.into()
+                    s
                 }));
             },
         };
-        Ok(unsafe { DataFrame::new_no_checks(new_height, cols_t) })
+        Ok(unsafe { DataFrame::new_no_checks(cols_t) })
     }
 
     pub fn transpose(
@@ -182,9 +183,9 @@ unsafe fn add_value<T: NumericNative>(
 // This just fills a pre-allocated mutable series vector, which may have a name column.
 // Nothing is returned and the actual DataFrame is constructed above.
 pub(super) fn numeric_transpose<T>(
-    cols: &[Column],
+    cols: &[Series],
     names_out: &[PlSmallStr],
-    cols_t: &mut Vec<Column>,
+    cols_t: &mut Vec<Series>,
 ) where
     T: PolarsNumericType,
     //S: AsRef<str>,
@@ -210,46 +211,43 @@ pub(super) fn numeric_transpose<T>(
     let validity_buf_ptr = &mut validity_buf as *mut Vec<Vec<bool>> as usize;
 
     POOL.install(|| {
-        cols.iter()
-            .map(Column::as_materialized_series)
-            .enumerate()
-            .for_each(|(row_idx, s)| {
-                let s = s.cast(&T::get_dtype()).unwrap();
-                let ca = s.unpack::<T>().unwrap();
+        cols.iter().enumerate().for_each(|(row_idx, s)| {
+            let s = s.cast(&T::get_dtype()).unwrap();
+            let ca = s.unpack::<T>().unwrap();
 
-                // SAFETY:
-                // we access in parallel, but every access is unique, so we don't break aliasing rules
-                // we also ensured we allocated enough memory, so we never reallocate and thus
-                // the pointers remain valid.
-                if has_nulls {
-                    for (col_idx, opt_v) in ca.iter().enumerate() {
-                        match opt_v {
-                            None => unsafe {
-                                let column = (*(validity_buf_ptr as *mut Vec<Vec<bool>>))
-                                    .get_unchecked_mut(col_idx);
-                                let el_ptr = column.as_mut_ptr();
-                                *el_ptr.add(row_idx) = false;
-                                // we must initialize this memory otherwise downstream code
-                                // might access uninitialized memory when the masked out values
-                                // are changed.
-                                add_value(values_buf_ptr, col_idx, row_idx, T::Native::default());
-                            },
-                            Some(v) => unsafe {
-                                add_value(values_buf_ptr, col_idx, row_idx, v);
-                            },
-                        }
-                    }
-                } else {
-                    for (col_idx, v) in ca.into_no_null_iter().enumerate() {
-                        unsafe {
-                            let column = (*(values_buf_ptr as *mut Vec<Vec<T::Native>>))
+            // SAFETY:
+            // we access in parallel, but every access is unique, so we don't break aliasing rules
+            // we also ensured we allocated enough memory, so we never reallocate and thus
+            // the pointers remain valid.
+            if has_nulls {
+                for (col_idx, opt_v) in ca.iter().enumerate() {
+                    match opt_v {
+                        None => unsafe {
+                            let column = (*(validity_buf_ptr as *mut Vec<Vec<bool>>))
                                 .get_unchecked_mut(col_idx);
                             let el_ptr = column.as_mut_ptr();
-                            *el_ptr.add(row_idx) = v;
-                        }
+                            *el_ptr.add(row_idx) = false;
+                            // we must initialize this memory otherwise downstream code
+                            // might access uninitialized memory when the masked out values
+                            // are changed.
+                            add_value(values_buf_ptr, col_idx, row_idx, T::Native::default());
+                        },
+                        Some(v) => unsafe {
+                            add_value(values_buf_ptr, col_idx, row_idx, v);
+                        },
                     }
                 }
-            })
+            } else {
+                for (col_idx, v) in ca.into_no_null_iter().enumerate() {
+                    unsafe {
+                        let column = (*(values_buf_ptr as *mut Vec<Vec<T::Native>>))
+                            .get_unchecked_mut(col_idx);
+                        let el_ptr = column.as_mut_ptr();
+                        *el_ptr.add(row_idx) = v;
+                    }
+                }
+            }
+        })
     });
 
     let par_iter = values_buf
@@ -279,7 +277,7 @@ pub(super) fn numeric_transpose<T>(
                 values.into(),
                 validity,
             );
-            ChunkedArray::with_chunk(name.clone(), arr).into_column()
+            ChunkedArray::with_chunk(name.clone(), arr).into_series()
         });
     POOL.install(|| cols_t.par_extend(par_iter));
 }

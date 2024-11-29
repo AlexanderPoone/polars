@@ -158,7 +158,7 @@ impl FileCache {
                 get_file_fetcher()?,
                 ttl,
             ));
-            entries.insert(uri, entry.clone());
+            entries.insert_unique_unchecked(uri, entry.clone());
             Ok(entry.clone())
         }
     }

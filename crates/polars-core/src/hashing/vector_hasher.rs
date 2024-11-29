@@ -1,5 +1,4 @@
 use arrow::bitmap::utils::get_bit_unchecked;
-use polars_utils::hashing::folded_multiply;
 use polars_utils::total_ord::{ToTotalOrd, TotalHash};
 use rayon::prelude::*;
 use xxhash_rust::xxh3::xxh3_64_with_seed;
@@ -29,6 +28,11 @@ pub trait VecHash {
     ) -> PolarsResult<()> {
         polars_bail!(un_impl = vec_hash_combine);
     }
+}
+
+pub(crate) const fn folded_multiply(s: u64, by: u64) -> u64 {
+    let result = (s as u128).wrapping_mul(by as u128);
+    ((result & 0xffff_ffff_ffff_ffff) as u64) ^ ((result >> 64) as u64)
 }
 
 pub(crate) fn get_null_hash_value(random_state: &PlRandomState) -> u64 {
@@ -446,7 +450,7 @@ pub fn _df_rows_to_hashes_threaded_vertical(
             .map(|df| {
                 let hb = hasher_builder.clone();
                 let mut hashes = vec![];
-                columns_to_hashes(df.get_columns(), Some(hb), &mut hashes)?;
+                series_to_hashes(df.get_columns(), Some(hb), &mut hashes)?;
                 Ok(UInt64Chunked::from_vec(PlSmallStr::EMPTY, hashes))
             })
             .collect::<PolarsResult<Vec<_>>>()
@@ -454,8 +458,8 @@ pub fn _df_rows_to_hashes_threaded_vertical(
     Ok((hashes, hasher_builder))
 }
 
-pub fn columns_to_hashes(
-    keys: &[Column],
+pub(crate) fn series_to_hashes(
+    keys: &[Series],
     build_hasher: Option<PlRandomState>,
     hashes: &mut Vec<u64>,
 ) -> PolarsResult<PlRandomState> {

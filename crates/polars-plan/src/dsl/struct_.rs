@@ -105,7 +105,7 @@ impl StructNameSpace {
             function: FunctionExpr::StructExpr(StructFunction::WithFields),
             options: FunctionOptions {
                 collect_groups: ApplyOptions::ElementWise,
-                flags: FunctionFlags::default()
+                flags: FunctionFlags::default() & !FunctionFlags::ALLOW_GROUP_AWARE
                     | FunctionFlags::PASS_NAME_TO_APPLY
                     | FunctionFlags::INPUT_WILDCARD_EXPANSION,
                 ..Default::default()

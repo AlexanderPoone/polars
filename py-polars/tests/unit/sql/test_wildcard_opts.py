@@ -180,6 +180,6 @@ def test_select_wildcard_errors(df: pl.DataFrame) -> None:
     # note: missing "()" around the exclude option results in dupe col
     with pytest.raises(
         DuplicateError,
-        match="City",
+        match="the name 'City' is duplicate",
     ):
         assert df.sql("SELECT * EXCLUDE Address, City FROM self")

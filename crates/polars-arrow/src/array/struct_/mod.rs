@@ -2,10 +2,14 @@ use super::{new_empty_array, new_null_array, Array, Splitable};
 use crate::bitmap::Bitmap;
 use crate::datatypes::{ArrowDataType, Field};
 
+#[cfg(feature = "arrow_rs")]
+mod data;
 mod ffi;
 pub(super) mod fmt;
 mod iterator;
-use polars_error::{polars_bail, polars_ensure, PolarsResult};
+mod mutable;
+pub use mutable::*;
+use polars_error::{polars_bail, PolarsResult};
 
 use crate::compute::utils::combine_validities_and;
 
@@ -23,15 +27,12 @@ use crate::compute::utils::combine_validities_and;
 ///     Field::new("c".into(), ArrowDataType::Int32, false),
 /// ];
 ///
-/// let array = StructArray::new(ArrowDataType::Struct(fields), 4, vec![boolean, int], None);
+/// let array = StructArray::new(ArrowDataType::Struct(fields), vec![boolean, int], None);
 /// ```
 #[derive(Clone)]
 pub struct StructArray {
     dtype: ArrowDataType,
-    // invariant: each array has the same length
     values: Vec<Box<dyn Array>>,
-    // invariant: for each v in values: length == v.len()
-    length: usize,
     validity: Option<Bitmap>,
 }
 
@@ -47,17 +48,22 @@ impl StructArray {
     /// * the validity's length is not equal to the length of the first element
     pub fn try_new(
         dtype: ArrowDataType,
-        length: usize,
         values: Vec<Box<dyn Array>>,
         validity: Option<Bitmap>,
     ) -> PolarsResult<Self> {
         let fields = Self::try_get_fields(&dtype)?;
-
-        polars_ensure!(
-            fields.len() == values.len(),
-            ComputeError:
-                "a StructArray must have a number of fields in its DataType equal to the number of child values"
-        );
+        if fields.is_empty() {
+            assert!(values.is_empty(), "invalid struct");
+            assert_eq!(validity.map(|v| v.len()).unwrap_or(0), 0, "invalid struct");
+            return Ok(Self {
+                dtype,
+                values,
+                validity: None,
+            });
+        }
+        if fields.len() != values.len() {
+            polars_bail!(ComputeError:"a StructArray must have a number of fields in its DataType equal to the number of child values")
+        }
 
         fields
             .iter().map(|a| &a.dtype)
@@ -74,14 +80,15 @@ impl StructArray {
                 }
             })?;
 
+        let len = values[0].len();
         values
             .iter()
-            .map(|f| f.len())
+            .map(|a| a.len())
             .enumerate()
-            .try_for_each(|(index, f_length)| {
-                if f_length != length {
-                    polars_bail!(ComputeError: "The children must have the given number of values.
-                         However, the values at index {index} have a length of {f_length}, which is different from given length {length}.")
+            .try_for_each(|(index, a_len)| {
+                if a_len != len {
+                    polars_bail!(ComputeError: "The children must have an equal number of values.
+                         However, the values at index {index} have a length of {a_len}, which is different from values at index 0, {len}.")
                 } else {
                     Ok(())
                 }
@@ -89,14 +96,13 @@ impl StructArray {
 
         if validity
             .as_ref()
-            .map_or(false, |validity| validity.len() != length)
+            .map_or(false, |validity| validity.len() != len)
         {
             polars_bail!(ComputeError:"The validity length of a StructArray must match its number of elements")
         }
 
         Ok(Self {
             dtype,
-            length,
             values,
             validity,
         })
@@ -113,11 +119,10 @@ impl StructArray {
     /// * the validity's length is not equal to the length of the first element
     pub fn new(
         dtype: ArrowDataType,
-        length: usize,
         values: Vec<Box<dyn Array>>,
         validity: Option<Bitmap>,
     ) -> Self {
-        Self::try_new(dtype, length, values, validity).unwrap()
+        Self::try_new(dtype, values, validity).unwrap()
     }
 
     /// Creates an empty [`StructArray`].
@@ -127,7 +132,7 @@ impl StructArray {
                 .iter()
                 .map(|field| new_empty_array(field.dtype().clone()))
                 .collect();
-            Self::new(dtype, 0, values, None)
+            Self::new(dtype, values, None)
         } else {
             panic!("StructArray must be initialized with DataType::Struct");
         }
@@ -140,7 +145,7 @@ impl StructArray {
                 .iter()
                 .map(|field| new_null_array(field.dtype().clone(), length))
                 .collect();
-            Self::new(dtype, length, values, Some(Bitmap::new_zeroed(length)))
+            Self::new(dtype, values, Some(Bitmap::new_zeroed(length)))
         } else {
             panic!("StructArray must be initialized with DataType::Struct");
         }
@@ -151,10 +156,9 @@ impl StructArray {
 impl StructArray {
     /// Deconstructs the [`StructArray`] into its individual components.
     #[must_use]
-    pub fn into_data(self) -> (Vec<Field>, usize, Vec<Box<dyn Array>>, Option<Bitmap>) {
+    pub fn into_data(self) -> (Vec<Field>, Vec<Box<dyn Array>>, Option<Bitmap>) {
         let Self {
             dtype,
-            length,
             values,
             validity,
         } = self;
@@ -163,7 +167,7 @@ impl StructArray {
         } else {
             unreachable!()
         };
-        (fields, length, values, validity)
+        (fields, values, validity)
     }
 
     /// Slices this [`StructArray`].
@@ -194,7 +198,6 @@ impl StructArray {
         self.values
             .iter_mut()
             .for_each(|x| x.slice_unchecked(offset, length));
-        self.length = length;
     }
 
     /// Set the outer nulls into the inner arrays.
@@ -223,17 +226,7 @@ impl StructArray {
 impl StructArray {
     #[inline]
     fn len(&self) -> usize {
-        if cfg!(debug_assertions) {
-            for arr in self.values.iter() {
-                assert_eq!(
-                    arr.len(),
-                    self.length,
-                    "StructArray invariant: each array has same length"
-                );
-            }
-        }
-
-        self.length
+        self.values.first().map(|arr| arr.len()).unwrap_or(0)
     }
 
     /// The optional validity.
@@ -249,9 +242,7 @@ impl StructArray {
 
     /// Returns the fields of this [`StructArray`].
     pub fn fields(&self) -> &[Field] {
-        let fields = Self::get_fields(&self.dtype);
-        debug_assert_eq!(self.values().len(), fields.len());
-        fields
+        Self::get_fields(&self.dtype)
     }
 }
 
@@ -305,13 +296,11 @@ impl Splitable for StructArray {
         (
             Self {
                 dtype: self.dtype.clone(),
-                length: offset,
                 values: lhs_values,
                 validity: lhs_validity,
             },
             Self {
                 dtype: self.dtype.clone(),
-                length: self.length - offset,
                 values: rhs_values,
                 validity: rhs_validity,
             },

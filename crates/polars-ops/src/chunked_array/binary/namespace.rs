@@ -34,14 +34,18 @@ pub trait BinaryNameSpaceImpl: AsBinary {
     fn ends_with(&self, sub: &[u8]) -> BooleanChunked {
         let ca = self.as_binary();
         let f = |s: &[u8]| s.ends_with(sub);
-        ca.apply_nonnull_values_generic(DataType::Boolean, f)
+        let mut out: BooleanChunked = ca.into_iter().map(|opt_s| opt_s.map(f)).collect();
+        out.rename(ca.name().clone());
+        out
     }
 
     /// Check if strings starts with a substring
     fn starts_with(&self, sub: &[u8]) -> BooleanChunked {
         let ca = self.as_binary();
         let f = |s: &[u8]| s.starts_with(sub);
-        ca.apply_nonnull_values_generic(DataType::Boolean, f)
+        let mut out: BooleanChunked = ca.into_iter().map(|opt_s| opt_s.map(f)).collect();
+        out.rename(ca.name().clone());
+        out
     }
 
     fn starts_with_chunked(&self, prefix: &BinaryChunked) -> BooleanChunked {

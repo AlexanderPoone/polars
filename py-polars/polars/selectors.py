@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
 from datetime import timezone
 from functools import reduce
 from operator import or_
 from typing import (
     TYPE_CHECKING,
     Any,
+    Collection,
     Literal,
+    Mapping,
     NoReturn,
+    Sequence,
     overload,
 )
 
@@ -246,7 +248,7 @@ def _expand_selector_dicts(
             if tuple_keys:
                 expanded[cols] = value
             else:
-                expanded.update(dict.fromkeys(cols, value))
+                expanded.update({c: value for c in cols})
         else:
             expanded[key] = value
     return expanded
@@ -317,7 +319,7 @@ class _selector_proxy_(Expr):
         expr: Expr,
         name: str,
         parameters: dict[str, Any] | None = None,
-    ) -> None:
+    ):
         self._pyexpr = expr._pyexpr
         self._attrs = {
             "params": parameters,
@@ -385,6 +387,10 @@ class _selector_proxy_(Expr):
     def __and__(self, other: Any) -> SelectorType | Expr:
         if is_column(other):
             colname = other.meta.output_name()
+            if self._attrs["name"] == "by_name" and (
+                params := self._attrs["params"]
+            ).get("require_all", True):
+                return by_name(*params["*names"], colname)
             other = by_name(colname)
         if is_selector(other):
             return _selector_proxy_(
@@ -394,12 +400,6 @@ class _selector_proxy_(Expr):
             )
         else:
             return self.as_expr().__and__(other)
-
-    def __rand__(self, other: Any) -> Expr:
-        if is_column(other):
-            colname = other.meta.output_name()
-            return by_name(colname) & self
-        return self.as_expr().__rand__(other)
 
     @overload
     def __or__(self, other: SelectorType) -> SelectorType: ...
@@ -419,11 +419,6 @@ class _selector_proxy_(Expr):
         else:
             return self.as_expr().__or__(other)
 
-    def __ror__(self, other: Any) -> Expr:
-        if is_column(other):
-            other = by_name(other.meta.output_name())
-        return self.as_expr().__ror__(other)
-
     @overload
     def __xor__(self, other: SelectorType) -> SelectorType: ...
 
@@ -441,6 +436,21 @@ class _selector_proxy_(Expr):
             )
         else:
             return self.as_expr().__or__(other)
+
+    def __rand__(self, other: Any) -> Expr:
+        if is_column(other):
+            colname = other.meta.output_name()
+            if self._attrs["name"] == "by_name" and (
+                params := self._attrs["params"]
+            ).get("require_all", True):
+                return by_name(colname, *params["*names"])
+            other = by_name(colname)
+        return self.as_expr().__rand__(other)
+
+    def __ror__(self, other: Any) -> Expr:
+        if is_column(other):
+            other = by_name(other.meta.output_name())
+        return self.as_expr().__ror__(other)
 
     def __rxor__(self, other: Any) -> Expr:
         if is_column(other):
@@ -500,7 +510,7 @@ class _selector_proxy_(Expr):
 def _re_string(string: str | Collection[str], *, escape: bool = True) -> str:
     """Return escaped regex, potentially representing multiple string fragments."""
     if isinstance(string, str):
-        rx = re_escape(string) if escape else string
+        rx = f"{re_escape(string)}" if escape else string
     else:
         strings: list[str] = []
         for st in string:

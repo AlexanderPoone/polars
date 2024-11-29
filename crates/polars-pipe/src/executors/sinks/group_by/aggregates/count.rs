@@ -2,6 +2,7 @@ use std::any::Any;
 
 use polars_core::datatypes::{AnyValue, DataType};
 use polars_core::prelude::{Series, IDX_DTYPE};
+use polars_utils::unwrap::UnwrapUncheckedRelease;
 
 use super::*;
 use crate::operators::IdxSize;
@@ -22,7 +23,7 @@ impl<const INCLUDE_NULL: bool> AggregateFn for CountAgg<INCLUDE_NULL> {
     }
 
     fn pre_agg(&mut self, _chunk_idx: IdxSize, item: &mut dyn ExactSizeIterator<Item = AnyValue>) {
-        let item = unsafe { item.next().unwrap_unchecked() };
+        let item = unsafe { item.next().unwrap_unchecked_release() };
         if INCLUDE_NULL {
             self.count += 1;
         } else {
@@ -44,7 +45,7 @@ impl<const INCLUDE_NULL: bool> AggregateFn for CountAgg<INCLUDE_NULL> {
     }
 
     fn combine(&mut self, other: &dyn Any) {
-        let other = unsafe { other.downcast_ref::<Self>().unwrap_unchecked() };
+        let other = unsafe { other.downcast_ref::<Self>().unwrap_unchecked_release() };
         self.count += other.count;
     }
 

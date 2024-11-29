@@ -11,7 +11,6 @@ use num_traits::{Float, Num, NumCast};
 pub use quantile::*;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use strum_macros::IntoStaticStr;
 pub use sum::*;
 pub use variance::*;
 
@@ -22,7 +21,7 @@ use crate::legacy::error::PolarsResult;
 use crate::types::NativeType;
 
 pub trait RollingAggWindowNoNulls<'a, T: NativeType> {
-    fn new(slice: &'a [T], start: usize, end: usize, params: Option<RollingFnParams>) -> Self;
+    fn new(slice: &'a [T], start: usize, end: usize, params: DynArgs) -> Self;
 
     /// Update and recompute the window
     ///
@@ -37,7 +36,7 @@ pub(super) fn rolling_apply_agg_window<'a, Agg, T, Fo>(
     window_size: usize,
     min_periods: usize,
     det_offsets_fn: Fo,
-    params: Option<RollingFnParams>,
+    params: DynArgs,
 ) -> PolarsResult<ArrayRef>
 where
     Fo: Fn(Idx, WindowSize, Len) -> (Start, End),
@@ -70,21 +69,16 @@ where
     Ok(Box::new(arr))
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash, IntoStaticStr)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[strum(serialize_all = "snake_case")]
-pub enum QuantileMethod {
+pub enum QuantileInterpolOptions {
     #[default]
     Nearest,
     Lower,
     Higher,
     Midpoint,
     Linear,
-    Equiprobable,
 }
-
-#[deprecated(note = "use QuantileMethod instead")]
-pub type QuantileInterpolOptions = QuantileMethod;
 
 pub(super) fn rolling_apply_weights<T, Fo, Fa>(
     values: &[T],

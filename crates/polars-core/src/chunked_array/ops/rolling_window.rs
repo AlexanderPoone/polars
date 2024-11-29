@@ -1,10 +1,9 @@
-use arrow::legacy::prelude::RollingFnParams;
+use arrow::legacy::prelude::DynArgs;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[cfg_attr(feature = "rolling_window", derive(PartialEq))]
 pub struct RollingOptionsFixedWindow {
     /// The length of the window.
     pub window_size: usize,
@@ -15,9 +14,20 @@ pub struct RollingOptionsFixedWindow {
     pub weights: Option<Vec<f64>>,
     /// Set the labels at the center of the window.
     pub center: bool,
-    /// Optional parameters for the rolling
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub fn_params: Option<RollingFnParams>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub fn_params: DynArgs,
+}
+
+#[cfg(feature = "rolling_window")]
+impl PartialEq for RollingOptionsFixedWindow {
+    fn eq(&self, other: &Self) -> bool {
+        self.window_size == other.window_size
+            && self.min_periods == other.min_periods
+            && self.weights == other.weights
+            && self.center == other.center
+            && self.fn_params.is_none()
+            && other.fn_params.is_none()
+    }
 }
 
 impl Default for RollingOptionsFixedWindow {

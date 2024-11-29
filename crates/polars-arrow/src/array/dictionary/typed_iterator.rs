@@ -117,9 +117,11 @@ impl<'a, K: DictionaryKey, V: DictValue> Iterator for DictionaryValuesIterTyped<
     }
 }
 
-unsafe impl<K: DictionaryKey, V: DictValue> TrustedLen for DictionaryValuesIterTyped<'_, K, V> {}
+unsafe impl<'a, K: DictionaryKey, V: DictValue> TrustedLen for DictionaryValuesIterTyped<'a, K, V> {}
 
-impl<K: DictionaryKey, V: DictValue> DoubleEndedIterator for DictionaryValuesIterTyped<'_, K, V> {
+impl<'a, K: DictionaryKey, V: DictValue> DoubleEndedIterator
+    for DictionaryValuesIterTyped<'a, K, V>
+{
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.index == self.end {
@@ -179,10 +181,9 @@ impl<'a, K: DictionaryKey, V: DictValue> Iterator for DictionaryIterTyped<'a, K,
     }
 }
 
-unsafe impl<K: DictionaryKey, V: DictValue> TrustedLen for DictionaryIterTyped<'_, K, V> {}
+unsafe impl<'a, K: DictionaryKey, V: DictValue> TrustedLen for DictionaryIterTyped<'a, K, V> {}
 
-impl<K: DictionaryKey, V: DictValue> ExactSizeIterator for DictionaryIterTyped<'_, K, V> {}
-impl<K: DictionaryKey, V: DictValue> DoubleEndedIterator for DictionaryIterTyped<'_, K, V> {
+impl<'a, K: DictionaryKey, V: DictValue> DoubleEndedIterator for DictionaryIterTyped<'a, K, V> {
     #[inline]
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.index == self.end {

@@ -1,4 +1,4 @@
-use polars_parquet_format::Type;
+use parquet_format_safe::Type;
 #[cfg(feature = "serde_types")]
 use serde::{Deserialize, Serialize};
 
