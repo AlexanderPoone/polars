@@ -53,6 +53,11 @@ fn main() -> PolarsResult<()> {
     for idx in 1.._dff.height() {
         let _ = _dff.get_row_amortized(idx, &mut row); // pass row by reference,
         category = &row.0[col]; // .0 turns the pl::Row object into a Vec
+        
+        if category.get_str().unwrap() == "meat" { // to compare strings, we must use &str NOT String
+            break       
+        }
+
         println!("{row:?}          {category:?}");
     }
     // cf. iterrows() ABOVE
