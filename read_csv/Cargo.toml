@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-polars = { version = "0.44.2", features = ["lazy", "csv", "ipc"] }
+polars = { version = "0.45.1", features = ["rows", "lazy", "csv", "ipc"] }
 
 [features]
 write_output = ["polars/ipc", "polars/parquet"]
