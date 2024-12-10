@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use calamine::{open_workbook, Data, Reader, Xlsx};
 use polars::io::mmap::MmapBytesReader;
 use polars::prelude::*;
 
@@ -53,18 +54,19 @@ fn main() -> PolarsResult<()> {
     for idx in 1.._dff.height() {
         let _ = _dff.get_row_amortized(idx, &mut row); // pass row by reference,
         category = row.0[col].get_str().unwrap(); // .0 turns the pl::Row object into a Vec
-        
-        if category == "meat" { // to compare strings, we must use &str NOT String
-            break       
-        }
 
+        if category == "meat" {
+            // to compare strings, we must use &str NOT String
+            break;
+        }
         println!("{row:?}          {category:?}");
     }
     // cf. iterrows() ABOVE
-
     println!("{_dff:?}");
 
-    // write_other_formats(&mut df)?;
+    let mut workbook: Xlsx<_> = open_workbook("../datasets/foods1.xlsx").expect("Cannot open file");
+    let sheet = workbook.worksheet_range("Sheet1").unwrap();
+
     Ok(())
 }
 

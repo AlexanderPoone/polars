@@ -11,8 +11,10 @@ fn main() {
     ]"#;
 
     let res = JsonReader::new(Cursor::new(data)).finish();
+
     println!("{:?}", res);    // <-------------------------------------------- both wrapped and unwrapped versions can be printed
     assert!(res.is_ok());
     let df = res.unwrap();
     println!("{:?}", df);    // <-------------------------------------------- both wrapped and unwrapped versions can be printed
+
 }

@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 polars = { version = "0.45.1", features = ["rows", "lazy", "csv", "ipc"] }
+calamine = "0.26.1"
 
 [features]
 write_output = ["polars/ipc", "polars/parquet"]
