@@ -48,13 +48,13 @@ fn main() -> PolarsResult<()> {
     // cf. iterrows() BELOW
     let mut row = _dff.get_row(0)?; // pass row by reference, mutable
     let col = _dff.get_column_index("category").unwrap(); //  the `?` operator can only be used on `Result`s, not `Option`s, in a function that returns `Result`
-    let mut category = &row.0[col]; // .0 turns the pl::Row object into a Vec
+    let mut category = row.0[col].get_str().unwrap(); // .0 turns the pl::Row object into a Vec
     println!("{row:?}          {category:?}");
     for idx in 1.._dff.height() {
         let _ = _dff.get_row_amortized(idx, &mut row); // pass row by reference,
-        category = &row.0[col]; // .0 turns the pl::Row object into a Vec
+        category = row.0[col].get_str().unwrap(); // .0 turns the pl::Row object into a Vec
         
-        if category.get_str().unwrap() == "meat" { // to compare strings, we must use &str NOT String
+        if category == "meat" { // to compare strings, we must use &str NOT String
             break       
         }
 
