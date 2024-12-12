@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use calamine::{open_workbook, Data, Reader, Xlsx};
 use polars::io::mmap::MmapBytesReader;
@@ -14,7 +15,8 @@ fn main() -> PolarsResult<()> {
         .batched(None)
         .unwrap();
 
-    let _dff = CsvReadOptions::default()
+    let start = Instant::now();
+    let mut _dff = CsvReadOptions::default()
         .with_has_header(true) // default is true
         .with_n_rows(Some(10))
         .with_columns(Some(
@@ -63,6 +65,14 @@ fn main() -> PolarsResult<()> {
     }
     // cf. iterrows() ABOVE
     println!("{_dff:?}");
+    println!("{:?}", start.elapsed());
+    let parquet_out = "../datasets/foods1.parquet";
+    if std::fs::metadata(parquet_out).is_err() {
+        let f = std::fs::File::create(parquet_out).unwrap();
+        ParquetWriter::new(f)
+            .with_statistics(StatisticsOptions::default())
+            .finish(&mut _dff)?;
+    }
 
     let mut workbook: Xlsx<_> = open_workbook("../datasets/foods1.xlsx").expect("Cannot open file");
     let sheet = workbook.worksheet_range("Sheet1").unwrap();

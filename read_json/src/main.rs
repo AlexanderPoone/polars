@@ -11,6 +11,8 @@ fn main() {
     ]"#;
 
     let res = JsonReader::new(Cursor::new(data)).finish();
+    // JsonReader::with_json_format(JsonFormat::JsonLines)
+    // JsonReader::with_json_format(self, format)
 
     println!("{:?}", res);    // <-------------------------------------------- both wrapped and unwrapped versions can be printed
     assert!(res.is_ok());
