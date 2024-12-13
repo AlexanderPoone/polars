@@ -2,10 +2,21 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use calamine::{open_workbook, Data, Reader, Xlsx};
+use dirs_next::desktop_dir;
+use glob::glob; // <--------------------------------------------------- glob glob !!!
 use polars::io::mmap::MmapBytesReader;
-use polars::prelude::*;
+use polars::prelude::*; // <--------------------------------------- dirs-next !!!
 
 fn main() -> PolarsResult<()> {
+    let binding = desktop_dir().unwrap(); // <----------------- consider using a `let` binding to create a longer lived value
+    let desktop = binding.to_str().unwrap();
+    for entry in glob(format!("{desktop}/*.txt").as_str()).expect("Failed to read glob pattern") {
+        match entry {
+            Ok(path) => println!("{:?}", path.display()),
+            Err(e) => println!("{:?}", e),
+        }
+    }
+
     let file = std::fs::File::open("../datasets/foods1.csv").unwrap();
     let file = Box::new(file) as Box<dyn MmapBytesReader>;
     let _df = CsvReader::new(file)
@@ -66,14 +77,18 @@ fn main() -> PolarsResult<()> {
     // cf. iterrows() ABOVE
     println!("{_dff:?}");
     println!("{:?}", start.elapsed());
+
+    // Export to Parquet
     let parquet_out = "../datasets/foods1.parquet";
-    if std::fs::metadata(parquet_out).is_err() {
+    if std::fs::metadata(parquet_out).is_err() { // <-------------------------- if file does not exist...
+        println!("Exporting to parquet...");
         let f = std::fs::File::create(parquet_out).unwrap();
         ParquetWriter::new(f)
             .with_statistics(StatisticsOptions::default())
             .finish(&mut _dff)?;
     }
 
+    // Export to Excel?
     let mut workbook: Xlsx<_> = open_workbook("../datasets/foods1.xlsx").expect("Cannot open file");
     let sheet = workbook.worksheet_range("Sheet1").unwrap();
 
